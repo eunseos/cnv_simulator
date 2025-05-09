@@ -3,14 +3,14 @@
 #SBATCH --output=logs/output_%x.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=512G
-#SBATCH --time=12:00:00
+#SBATCH --mem=256G
+#SBATCH --time=3:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL,BEGIN
 #SBATCH --mail-user=sunge@mskcc.org
 
 # Directory containing BAM files
-BAM_DIR="/data1/shahs3/users/sunge/cnv_simulator/data/sample_3000cell_bams"
+BAM_DIR="/data1/shahs3/users/sunge/cnv_simulator/synthetic_bams"
 
 module load samtools
 

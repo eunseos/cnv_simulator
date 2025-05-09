@@ -6,8 +6,8 @@ import random
 import argparse
 from collections import Counter
 
-np.random.seed(1704)
-random.seed(1704)
+np.random.seed(17321)
+random.seed(17321)
 
 ### Script for generating CNV profiles for testing
 
@@ -18,9 +18,9 @@ def copy_state_map(state = 2, copy = 0):
     """
     Map copy states to their corresponding copy numbers.
     """
-    state_copy_map = {0:-2, 1:-1, 2:0, 3:1, 4:2, 5:3, 6:4, 7:5, 8:6, 9:7,
+    copy_state_map = {0:-2, 1:-1, 2:0, 3:1, 4:2, 5:3, 6:4, 7:5, 8:6, 9:7,
                       10:8, 11:9, 12:10, 13:11, 14:12}
-    copy_state_map = {-2:0, -1:1, 0:2, 1:3, 2:4, 3:5, 4:6, 5:7, 6:8, 7:9,
+    state_copy_map = {-2:0, -1:1, 0:2, 1:3, 2:4, 3:5, 4:6, 5:7, 6:8, 7:9,
                       8:10, 9:11, 10:12, 11:13, 12:14}
     
     if (state != None) and (state in state_copy_map):
@@ -54,7 +54,7 @@ def filter_overlapping_cnv(cnv_profile):
             if len(clone_chr_cnv) > 0:
                 # Initialize the first CNV as the current CNV
                 current_cnv = clone_chr_cnv.iloc[0]
-                for index, row in clone_chr_cnv.iloc[1:].iterrows():
+                for _, row in clone_chr_cnv.iloc[1:].iterrows():
                     # Check if the current CNV overlaps with the next CNV
                     if row['start'] <= current_cnv['end']:
                         # Merge the two CNVs
@@ -107,7 +107,7 @@ def fill_in_cnv_profile(cnv_profile, chr_lengths_df, chr_lst):
                 # If there are no CNVs for this chromosome, add a new row with copy number 0
                 chr_length = chr_lengths_df[chr_lengths_df['chr'] == chr]['length'].values[0]
                 filled_cnv_profile_lst.append({'clone': clone, 'chr': chr, 'start': 0, 'end': chr_length,
-                                               'copy_number': 0, 'state': 2, 'size': chr_length})
+                                               'state': 0, 'copy_number': 2, 'size': chr_length})
             else:
                 # If there are CNVs for this chromosome, fill in gaps
                 current_chr_pos = 0
@@ -115,18 +115,18 @@ def fill_in_cnv_profile(cnv_profile, chr_lengths_df, chr_lst):
                     if current_chr_pos < row['start']:
                         # Add a new row for the gap
                         filled_cnv_profile_lst.append({'clone': clone, 'chr': chr, 'start': current_chr_pos,
-                                                       'end': row['start'], 'copy_number': 0, 'state': 2,
+                                                       'end': row['start'], 'state': 0, 'copy_number': 2, 
                                                        'size': row['start'] - current_chr_pos})
                     # Add the current CNV
                     filled_cnv_profile_lst.append({'clone': clone, 'chr': chr, 'start': row['start'],
-                                                   'end': row['end'], 'copy_number': row['copy_number'],
-                                                   'state': row['state'], 'size': row['size']})
+                                                   'end': row['end'], 'state': row['state'], 
+                                                   'copy_number': row['copy_number'], 'size': row['size']})
                     current_chr_pos = row['end']
                 # Add a new row for the end of the chromosome
                 chr_length = chr_lengths_df[chr_lengths_df['chr'] == chr]['length'].values[0]
                 if current_chr_pos < chr_length:
                     filled_cnv_profile_lst.append({'clone': clone, 'chr': chr, 'start': current_chr_pos,
-                                                   'end': chr_length, 'copy_number': 0, 'state': 2,
+                                                   'end': chr_length, 'state': 0, 'copy_number': 2, 
                                                    'size': chr_length - current_chr_pos})
     # Create a DataFrame from the filled CNV profile list
     filled_cnv_profile = pd.DataFrame(filled_cnv_profile_lst)
@@ -137,7 +137,7 @@ def fill_in_cnv_profile(cnv_profile, chr_lengths_df, chr_lst):
     
 
 def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df,
-                         possible_states = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                         possible_copy_numbers = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
                          min_cnv_size = 2000000, max_cnv_size = 10000000):
     """
     Generate a CNV profile for a given number of clones and cells per clone.
@@ -167,13 +167,14 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
     
     cnv_profile = pd.DataFrame(columns=['clone', 'chr', 'start', 'end', 'copy_number', 'state'])
     for clone in range(0, num_clones):
-        print(num_cnvs_per_clone[clone])
+        print(f"Generating CNV profile for clone {clone}")
+        print(f"Number of CNVs: {num_cnvs_per_clone[clone]}")
         clone_cnv_count = num_cnvs_per_clone[clone]
 
         # Assign number of cnvs to each chromosome
         num_cnvs_per_chr = Counter(np.random.choice(chr_lst, size = clone_cnv_count,
                                                     p = select_chr_lengths_df['length'] / total_chr_length))
-        num_cnvs_per_chr = dict(sorted(num_cnvs_per_chr.items(), key=lambda x: int(x[0])))
+        num_cnvs_per_chr = dict(sorted(num_cnvs_per_chr.items(), key=lambda x: str(x[0])))
 
         # Generate CNV profile
         for chr in num_cnvs_per_chr.keys():
@@ -185,11 +186,11 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
                 cnv_size = int(cnv_end - cnv_start)
 
                 # Generate random copy number and state
-                cnv_state = random.choice(possible_states)
-                cnv_copy_number = copy_state_map(state = cnv_state)
+                cnv_copy_number = random.choice(possible_copy_numbers)
+                cnv_state = copy_state_map(copy = cnv_copy_number)
 
                 cnv_profile = pd.concat([cnv_profile, pd.DataFrame([{'clone': clone, 'chr': chr, 'start': cnv_start, 'end': cnv_end, 'size': cnv_size,
-                                                                    'copy_number': cnv_copy_number, 'state': cnv_state}])],
+                                                                    'state': cnv_state, 'copy_number': cnv_copy_number}])],
                                         ignore_index=True)
     
     # Sort cnv_profile by clone, chr, and start position
@@ -200,6 +201,28 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
     cnv_profile = fill_in_cnv_profile(cnv_profile, chr_lengths_df, chr_lst)
 
     return cnv_profile
+
+
+def get_required_copy_cell_count(cnv_profile, cells_per_clone_lst, verbose = True):
+    """ 
+    Get the total number of added copies and the total number of cells required
+    for the CNV profile.
+    """
+    num_clones = len(cells_per_clone_lst)
+
+    max_added_copies = cnv_profile[cnv_profile["clone"] != "-1"]["state"].max()
+    # for clone in range(num_clones):
+    #     clone_added_copies = cnv_profile[(cnv_profile["clone"] == clone) & \
+    #                                      (cnv_profile["state"] > 0)]["state"].max()
+    #     total_added_copies = max(total_added_copies, clone_added_copies * cells_per_clone_lst[clone])
+
+    total_required_cells = (np.max(cells_per_clone_lst) * max_added_copies) + np.sum(cells_per_clone_lst)
+
+    if verbose:
+        print(f"Total added copies: {max_added_copies}")
+        print(f"Total required cells: {total_required_cells}")
+
+    return max_added_copies, total_required_cells
 
 
 def select_groups(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst):
@@ -232,16 +255,13 @@ def select_groups(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst
     group_cell_counts = all_normal_cells["sample_group"].value_counts().sort_index().reset_index()
 
     # Compute total number of additional cells required
-    total_added_copies = 0
-    for clone in range(num_clones):
-        print(clone)
-        clone_added_copies = cnv_profile[(cnv_profile["clone"] == clone) & \
-                                         (cnv_profile["copy_number"] > 0)]["copy_number"].max()
-        total_added_copies = max(total_added_copies, clone_added_copies * cells_per_clone_lst[clone])
-    print(f"Total added copies: {total_added_copies}")
+    _, total_required_cells = get_required_copy_cell_count(cnv_profile, cells_per_clone_lst)
 
-    total_required_cells = np.sum(cells_per_clone_lst) * total_added_copies
-    print(f"Total required cells: {total_required_cells}")
+    # Check if there are enough cells in the groups
+    total_available_cells = np.sum(group_cell_counts["count"])
+    if total_available_cells < total_required_cells:
+        raise ValueError(f"Not enough cells in the groups to assign {total_required_cells} cells. "
+                         f"Only {total_available_cells} cells available.")
 
     # Select random groups such that their combined count exceeds total_required_cells
     selected_groups = []
@@ -259,7 +279,8 @@ def select_groups(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst
     return selected_groups
 
 
-def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst):
+def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst, group_name = None,
+                       verbose = False):
     """
     List cells to use for each CNV region in each clone
 
@@ -291,14 +312,20 @@ def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clon
         cell_barcode - Cell barcodes for each CNV region, joined by ","
     """
 
-    picked_groups = select_groups(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst)
-
-    group_cells = all_normal_cells[all_normal_cells["sample_group"].isin(picked_groups)]
+    if group_name == None:
+        picked_groups = select_groups(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst)
+        group_cells = all_normal_cells[all_normal_cells["sample_group"].isin(picked_groups)]
+    else:
+        group_cells = pd.read_csv(f"{DATADIR}/{group_name}.csv")
+        group_cells = group_cells.assign(sample_group = group_name)
+        _, total_required_cells = get_required_copy_cell_count(cnv_profile, cells_per_clone_lst, verbose = True)
+        if len(group_cells) < total_required_cells:
+            raise ValueError(f"Not enough cells in the groups to assign {total_required_cells} cells. "
+                             f"Only {len(group_cells)} cells available.")
 
     # Add baseline cells (copy number 0)
     baseline_cell_count = np.sum(cells_per_clone_lst)
     baseline_cells = group_cells.sample(n = baseline_cell_count)
-    baseline_cells_set = set(baseline_cells["cell_id"].values)
 
     # Assign clones to cells
     # Group cnv_profile by clone and loop through every clone
@@ -307,11 +334,11 @@ def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clon
     clone_cell_groups_lst = []
     for index, row in cnv_profile.iterrows():
         # if copy number is 0, -1, or -2, only baseline cells
-        if row['copy_number'] <= 0:
+        if row['state'] <= 0:
             clone_cell_barcodes = list(baseline_cells["cell_barcode"])
             clone_cell_groups = list(baseline_cells["sample_group"])
         else:
-            num_new_cells = int((row['copy_number']) * cells_per_clone_lst[row['clone'] - 1])
+            num_new_cells = int((row['state']) * cells_per_clone_lst[int(row['clone']) - 1])
             # Check if there are enough cells in the group
             if len(group_cells[~group_cells["cell_id"].isin(used_cells)]) < num_new_cells:
                 raise ValueError(f"Not enough cells in group {row['clone']} to assign clone cells")
@@ -319,96 +346,170 @@ def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clon
 
             ### TODO: Fix to account for sampling from multiple groups
 
-            clone_cells = pd.concat([baseline_cells, new_clone_cells])
+            clone_cells = new_clone_cells.copy()
             clone_cells = clone_cells.sort_values(by = ['sample_group', 'cell_barcode'])
 
             clone_cell_barcodes = list(clone_cells["cell_barcode"])
             clone_cell_groups = list(clone_cells["sample_group"])
         clone_cell_barcodes_lst.append(",".join(clone_cell_barcodes))
         clone_cell_groups_lst.append(",".join(map(str, clone_cell_groups)))
-
-    # clone_cell_barcodes_lst = []
-    # clone_cell_groups_lst
-    # for clone in range(num_clones):
-    #     used_cells = set(baseline_cells["cell_id"].values)
-    #     clone_cnv_profile = cnv_profile[cnv_profile['clone'] == clone]
-    #     for index, row in clone_cnv_profile.iterrows():
-    #         # if copy number is 0, -1, or -2, only baseline cells
-    #         if row['copy_number'] <= 0:
-    #             clone_cell_barcodes = list(baseline_cells["cell_barcode"])
-    #             clone_cell_groups = list(baseline_cells["sample_group"])
-    #         else:
-    #             num_new_cells = int((row['copy_number']) * cells_per_clone_lst[clone])
-    #             # Check if there are enough cells in the group
-    #             if len(group_cells[~group_cells["cell_id"].isin(baseline_cells_set)]) < num_new_cells:
-    #                 raise ValueError(f"Not enough cells in group {row['clone']} to assign clone cells")
-    #             new_clone_cells = group_cells[~group_cells["cell_id"].isin(baseline_cells_set)].sample(n = num_new_cells)
     
     cell_cnv_profile = cnv_profile.copy()
     cell_cnv_profile = cell_cnv_profile.assign(cell_barcode = clone_cell_barcodes_lst,
                                                cell_group = clone_cell_groups_lst)
+    # Add a new row for baseline cells with clone -1
+    baseline_row = {
+        'clone': -1, 'chr': 0, 'start': 0, 'end': 0,
+        'state': 0, 'copy_number': 0, 'size': 0,
+        'cell_barcode': ",".join(baseline_cells["cell_barcode"]),
+        'cell_group': ",".join(map(str, baseline_cells["sample_group"]))
+    }
+    cell_cnv_profile = pd.concat([pd.DataFrame([baseline_row]), cell_cnv_profile], ignore_index=True)
 
     return cell_cnv_profile
 
+def make_single_cnv_profiles(profile_input_row, all_normal_cells, chr_lengths_df, group_name = None):
+    """
+    Generate CNV profiles for any line of input. 
+    Randomly assigns breakpoints and copy numbers to each clone, then assigns cells to use.
+    """
+    # Extract parameters from the input row
+    test_id = profile_input_row["test_id"]
+    num_clones = profile_input_row["num_clones"]
+    cells_per_clone_lst = profile_input_row["cells_per_clone_lst"]
+    num_cnvs_per_clone = profile_input_row["num_cnvs_per_clone"]
+    chr_lst = profile_input_row["chr_lst"]
+    min_cnv_size = profile_input_row["min_cnv_size"]
+    max_cnv_size = profile_input_row["max_cnv_size"]
+    possible_copy_numbers = profile_input_row["possible_copy_numbers"]
+
+    print(f"Generating new CNV profile for {test_id} with {num_clones} clones and {cells_per_clone_lst} cells per clone")
+
+    # Generate CNV profile
+    cnv_profile = generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df,
+                                       possible_copy_numbers = possible_copy_numbers,
+                                       min_cnv_size = min_cnv_size, max_cnv_size = max_cnv_size)
+
+    # Assign cells to clones
+    cell_clones_df = assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst, group_name = group_name, verbose = True)
+
+    return cell_clones_df
+
 #%%
-def main(profile_input):
+def main(profile_input, cnv_profile_name = None, group_name = None):
+    """
+    Main function to generate CNV profiles for testing.
+    Parameters:
+    profile_input (pd.DataFrame): DataFrame containing CNV profile input.
+        test_id - Test ID for the CNV profile
+        num_clones - Number of clones
+        cells_per_clone_lst - List of number of cells per clone
+        num_cnvs_per_clone - List of number of CNVs per clone
+        chr_lst - List of chromosomes
+        min_cnv_size - Minimum size of CNVs
+        max_cnv_size - Maximum size of CNVs
+        possible_copy_numbers - List of possible copy numbers for CNVs
+    cnv_profile_name (str): Name of the CNV profile to generate. If None, generate profiles for all input rows.
+    group_name (str): Name of the group to select cells from. If None, select random groups.
+    """
+
     chr_lengths_df = pd.read_csv(f"{DATADIR}/chr_lengths.csv")
     chr_lengths_df['chr'] = chr_lengths_df['chr'].astype(str)
 
     all_normal_cells = pd.read_csv(f"{DATADIR}/all_normal_cells.csv")
 
-    for row in profile_input.iterrows():
-        test_id = row[1]["test_id"]
-        num_clones = row[1]["num_clones"]
-        cells_per_clone_lst = row[1]["cells_per_clone_lst"]
-        num_cnvs_per_clone = row[1]["num_cnvs_per_clone"]
-        chr_lst = row[1]["chr_lst"]
-        min_cnv_size = row[1]["min_cnv_size"]
-        max_cnv_size = row[1]["max_cnv_size"]
-        possible_states = row[1]["possible_states"]
-
-        print(f"Generating new CNV profile for {test_id} with {num_clones} clones and {cells_per_clone_lst} cells per clone")
-
-        cnv_profile = generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df,
-                                           possible_states = possible_states,
-                                           min_cnv_size = min_cnv_size, max_cnv_size = max_cnv_size)
+    if cnv_profile_name == None:
+        # Make profiles for all input rows
+        for _, row in profile_input.iterrows():
+            cell_cnv_profile = make_single_cnv_profiles(row, all_normal_cells, chr_lengths_df)
+            cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{row['test_id']}_cnv_profile.tsv"
+            cell_cnv_profile.to_csv(cnv_profile_path, sep = "\t", index = False)
+    else:
+        # Select the CNV profile from the input
+        profile_input_row = profile_input[profile_input["test_id"] == cnv_profile_name]
+        if len(profile_input_row) == 0:
+            raise ValueError(f"CNV profile {cnv_profile_name} not found in the input file.")
         
-        print(cnv_profile)
+        print(profile_input_row["possible_copy_numbers"])
 
-        cell_clones_df = assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst)
-        print(cell_clones_df)
+        # Load the CNV profile from the specified path
+        cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{cnv_profile_name}_cnv_profile.tsv"
+        # If CNV profile doens't exist, generate based on input row
+        if not os.path.exists(cnv_profile_path):
+            cell_cnv_profile = make_single_cnv_profiles(profile_input_row, all_normal_cells, chr_lengths_df, group_name = group_name)
+            cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{cnv_profile_name}_{group_name}_cnv_profile.tsv"
+            cell_cnv_profile.to_csv(cnv_profile_path, sep = "\t", index = False)
+        # Otherwise, load CNV profile and assign cells
+        else:
+            cnv_profile = pd.read_csv(cnv_profile_path, sep = "\t")
+            # Remove the first row (baseline cells) and existing cell barcodes
+            cnv_profile = cnv_profile[cnv_profile["clone"] != -1]
+            cnv_profile = cnv_profile.drop(columns=["cell_barcode", "cell_group"])
 
-        cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{test_id}_cnv_profile.tsv"
-        cell_clones_df.to_csv(cnv_profile_path, sep = "\t", index = False)
-        
+            # Get the parameters from the profile input
+            cells_per_clone_lst = profile_input[profile_input["test_id"] == cnv_profile_name]["cells_per_clone_lst"].values[0]
+            num_clones = len(cells_per_clone_lst)
+            
+            # Assign cells to clones
+            cell_clones_df = assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clone_lst, group_name = group_name)
+            print(cell_clones_df)
+
+            # Save the CNV profile with cell barcodes
+            new_cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{cnv_profile_name}_{group_name}_cnv_profile.tsv"
+            cell_clones_df.to_csv(new_cnv_profile_path, sep = "\t", index = False)
+
     return
 
 def parse_cnv_profile_input(input_path):
-    profile_input = pd.read_csv(input_path, sep = "\t")
-    profile_input["num_clones"] = profile_input["num_clones"].astype(int)
-    profile_input["cells_per_clone_lst"] = profile_input["cells_per_clone_lst"].astype(str).str.split(",")
-    profile_input["cells_per_clone_lst"] = profile_input["cells_per_clone_lst"].apply(lambda x: [int(i) for i in x])
-    profile_input["num_cnvs_per_clone"] = profile_input["num_cnvs_per_clone"].astype(str).str.split(",")
-    profile_input["num_cnvs_per_clone"] = profile_input["num_cnvs_per_clone"].apply(lambda x: [int(i) for i in x])
-    profile_input["chr_lst"] = profile_input["chr_lst"].astype(str).str.split(",")
-    profile_input["min_cnv_size"] = profile_input["min_cnv_size"].astype(int)
-    profile_input["max_cnv_size"] = profile_input["max_cnv_size"].astype(int)
-    profile_input["possible_states"] = profile_input["possible_states"].astype(str).str.split(",")
-    profile_input["possible_states"] = profile_input["possible_states"].apply(lambda x: [int(i) for i in x])
+    try:
+        profile_input = pd.read_csv(input_path, sep="\t")
+        # Validate columns
+        required_columns = [
+            "num_clones", "cells_per_clone_lst", "num_cnvs_per_clone",
+            "chr_lst", "min_cnv_size", "max_cnv_size", "possible_copy_numbers"
+        ]
+        for col in required_columns:
+            if col not in profile_input.columns:
+                raise ValueError(f"Missing required column: {col}")
+            
+        profile_input["num_clones"] = profile_input["num_clones"].astype(int)
+        profile_input["cells_per_clone_lst"] = profile_input["cells_per_clone_lst"].astype(str).str.split(",")
+        profile_input["cells_per_clone_lst"] = profile_input["cells_per_clone_lst"].apply(lambda x: [int(i) for i in x])
+        profile_input["num_cnvs_per_clone"] = profile_input["num_cnvs_per_clone"].astype(str).str.split(",")
+        profile_input["num_cnvs_per_clone"] = profile_input["num_cnvs_per_clone"].apply(lambda x: [int(i) for i in x])
+        profile_input["chr_lst"] = profile_input["chr_lst"].astype(str).str.split(",")
+        profile_input["min_cnv_size"] = profile_input["min_cnv_size"].astype(int)
+        profile_input["max_cnv_size"] = profile_input["max_cnv_size"].astype(int)
+        profile_input["possible_copy_numbers"] = profile_input["possible_copy_numbers"].astype(str).str.split(",")
+        profile_input["possible_copy_numbers"] = profile_input["possible_copy_numbers"].apply(lambda x: [int(i) for i in x])
 
-    # If chromosome list only contains 0, then include all chromosomes
-    all_chr_lst = [str(i) for i in range(1, 23)] + ["X", "Y"]
-    profile_input["chr_lst"] = profile_input["chr_lst"].apply(
-        lambda x: all_chr_lst.copy() if x == "0" else x
-    )
-
+        # If chromosome list only contains 0, then include all chromosomes
+        all_chr_lst = [str(i) for i in range(1, 23)] + ["X", "Y"]
+        profile_input["chr_lst"] = profile_input["chr_lst"].apply(
+            lambda x: all_chr_lst.copy() if x == ["0"] else x
+        )
+    except Exception as e:
+        raise ValueError(f"Error reading or validating input file: {e}")    
+    
     return profile_input
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate CNV profiles for testing.")
+    parser.add_argument("--input_path", type=str, required=True, help="Path to the input file.")
+    parser.add_argument("--cnv_profile_name", type=str, default=None, help="Name of the CNV profile to generate.")
+    parser.add_argument("--group_name", type=str, default=None, help="Name of the group to select cells from.")
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    input_path = "/data1/shahs3/users/sunge/cnv_simulator/data/synthetic_profile_inputs/small_test_1.tsv"
+    args = parse_args()
+    input_path = args.input_path
+    cnv_profile_name = args.cnv_profile_name
+    group_name = args.group_name
+
     profile_input = parse_cnv_profile_input(input_path)
 
-    print(profile_input)
+    print(f"Generating CNV profiles for {len(profile_input)} input rows.")
+    print(f"CNV profile name: {cnv_profile_name}")
+    print(f"Group name: {group_name}")
 
-    main(profile_input)
+    main(profile_input, cnv_profile_name = cnv_profile_name, group_name = group_name)

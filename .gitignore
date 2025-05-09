@@ -244,3 +244,5 @@ rsconnect/
 ### Local Directories
 data/
 slurm_scripts/logs
+synthetic_bams/
+figs/
