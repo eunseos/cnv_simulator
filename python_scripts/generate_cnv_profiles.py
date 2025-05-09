@@ -14,7 +14,7 @@ random.seed(17321)
 #%%
 DATADIR = "/data1/shahs3/users/sunge/cnv_simulator/data"
 
-def copy_state_map(state = 2, copy = 0):
+def copy_state_map(state = None, copy = None):
     """
     Map copy states to their corresponding copy numbers.
     """
@@ -37,15 +37,16 @@ def filter_overlapping_cnv(cnv_profile):
 
     Parameters:
     cnv_profile (pd.DataFrame): DataFrame containing CNV profile.
-        clone - Clone number, ranging from 0 to num_clones - 1
+        clone - Clone number, ranging from 0 to num_clones
         chr - Chromosome number
         start - Start position of CNV
         end - End position of CNV
         copy_number - Copy number of CNV
         state - State of CNV
     """
-    cnv_profile = cnv_profile.sort_values(by = ['chr', 'start'])
     filtered_cnv_profile_lst = []
+
+    print(f"Unique clones: {cnv_profile['clone'].unique()}")
 
     num_merged_cnvs = 0
     for clone in cnv_profile['clone'].unique():
@@ -82,7 +83,7 @@ def fill_in_cnv_profile(cnv_profile, chr_lengths_df, chr_lst):
 
     Parameters:
     cnv_profile (pd.DataFrame): DataFrame containing CNV profile.
-        clone - Clone number, ranging from 0 to num_clones - 1.
+        clone - Clone number, ranging from 0 to num_clones.
         chr - Chromosome number
         start - Start position of CNV
         end - End position of CNV
@@ -152,7 +153,7 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
 
     Returns:
     cnv_profile (pd.DataFrame): DataFrame containing CNV profile.
-        clone - Clone number, ranging from 0 to num_clones - 1.
+        clone - Clone number, ranging from 0 to num_clones.
     """
 
     # Check if cnvs can fit in chromosomes
@@ -170,6 +171,14 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
         print(f"Generating CNV profile for clone {clone}")
         print(f"Number of CNVs: {num_cnvs_per_clone[clone]}")
         clone_cnv_count = num_cnvs_per_clone[clone]
+
+        #Account for edge case of when clone_cnv_count = 0
+        if clone_cnv_count == 0:
+            chr_length = select_chr_lengths_df[select_chr_lengths_df['chr'] == chr_lst[0]]['length'].values[0]
+            cnv_profile = pd.concat([cnv_profile, 
+                                     pd.DataFrame([{'clone': clone, 'chr': chr_lst[0], 'start': 0, 'end': chr_length,
+                                                   'state': 0, 'copy_number': 2, 'size': chr_length}])],
+                                                   ignore_index=True)
 
         # Assign number of cnvs to each chromosome
         num_cnvs_per_chr = Counter(np.random.choice(chr_lst, size = clone_cnv_count,
@@ -338,13 +347,11 @@ def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clon
             clone_cell_barcodes = list(baseline_cells["cell_barcode"])
             clone_cell_groups = list(baseline_cells["sample_group"])
         else:
-            num_new_cells = int((row['state']) * cells_per_clone_lst[int(row['clone']) - 1])
+            num_new_cells = int((row['state']) * cells_per_clone_lst[int(row['clone'])])
             # Check if there are enough cells in the group
             if len(group_cells[~group_cells["cell_id"].isin(used_cells)]) < num_new_cells:
                 raise ValueError(f"Not enough cells in group {row['clone']} to assign clone cells")
             new_clone_cells = group_cells[~group_cells["cell_id"].isin(used_cells)].sample(n = num_new_cells)
-
-            ### TODO: Fix to account for sampling from multiple groups
 
             clone_cells = new_clone_cells.copy()
             clone_cells = clone_cells.sort_values(by = ['sample_group', 'cell_barcode'])
@@ -364,7 +371,25 @@ def assign_cell_clones(all_normal_cells, num_clones, cnv_profile, cells_per_clon
         'cell_barcode': ",".join(baseline_cells["cell_barcode"]),
         'cell_group': ",".join(map(str, baseline_cells["sample_group"]))
     }
-    cell_cnv_profile = pd.concat([pd.DataFrame([baseline_row]), cell_cnv_profile], ignore_index=True)
+    baseline_clone_cells_df = pd.DataFrame([baseline_row])
+
+    # Assign baseline cells to a clone
+    shuffled_baseline_cells = baseline_cells.sample(frac=1).reset_index(drop=True)
+    current_index = 0
+    for clone in range(num_clones):
+        clone_baseline_cells = shuffled_baseline_cells.iloc[current_index:current_index + cells_per_clone_lst[clone], ]
+        clone_row = {
+            'clone': clone, 'chr': 0, 'start': 0, 'end': 0,
+            'state': 0, 'copy_number': 0, 'size': 0,
+            'cell_barcode': ",".join(clone_baseline_cells["cell_barcode"]),
+            'cell_group': ",".join(map(str, clone_baseline_cells["sample_group"]))
+        }
+        baseline_clone_cells_df = pd.concat([baseline_clone_cells_df, pd.DataFrame([clone_row])], ignore_index=True)
+        current_index += cells_per_clone_lst[clone]
+    if current_index != len(shuffled_baseline_cells):
+        raise ValueError(f"Not all baseline cells were assigned to clones. {current_index} cells assigned, {len(shuffled_baseline_cells)} expected.")
+
+    cell_cnv_profile = pd.concat([baseline_clone_cells_df, cell_cnv_profile], ignore_index=True)
 
     return cell_cnv_profile
 

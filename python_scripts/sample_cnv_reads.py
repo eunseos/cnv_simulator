@@ -12,6 +12,7 @@ import pysam
 import argparse
 import subprocess
 import tempfile
+import shutil
 
 BASEDIR = "/data1/shahs3/users/sunge/cnv_simulator"
 OUTDIR = f"{BASEDIR}/synthetic_bams"
@@ -56,7 +57,7 @@ def samtools_read_id_filter(bam_path, out_path, read_ids):
     
     return out_path
 
-def samtools_get_cell_reads(bam_path, chr, start, end):
+def samtools_get_cell_reads(bam_path, chr = None, start = None, end = None):
     """
     Get the reads in a specific region sorted by cell barcode.
 
@@ -73,16 +74,17 @@ def samtools_get_cell_reads(bam_path, chr, start, end):
     """
     cmd = [
         "samtools", "view", "-@", str(NCORES),
-        bam_path,
-        f"{chr}:{start}-{end}"
+        bam_path
     ]
+    if chr and start and end:
+        cmd.append(f"{chr}:{start}-{end}")
     try:
         if VERBOSE:
             print(f"Executing command: {' '.join(cmd)}")
         region_reads_result = subprocess.run(cmd, stdout=subprocess.PIPE, check = True, text = True)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {' '.join(cmd)}")
-        print(f"Error message: {e}")
+        print(f"Error message: {e.stderr}")
         raise
 
     cell_reads_dict = {}
@@ -98,7 +100,17 @@ def samtools_get_cell_reads(bam_path, chr, start, end):
     return cell_reads_dict, reads_cell_dict
 
 
-def samtools_get_read_count(bam_path, chr, start, end):
+def samtools_get_group_read_count(group_bam_dict, chr, start, end):
+    """
+    Get the number of reads in the group_bam_dict for given region.
+    """
+    group_bam_length_dict = {}
+    for group, bam_path in group_bam_dict.items():
+        group_bam_length_dict[group] = samtools_get_indexed_read_count(bam_path, chr, start, end)
+    return group_bam_length_dict
+
+
+def samtools_get_indexed_read_count(bam_path, chr, start, end, cell_barcodes = None):
     """
     Get the number of reads in a specific region.
 
@@ -113,29 +125,133 @@ def samtools_get_read_count(bam_path, chr, start, end):
     -------
     read_count: Number of reads in the specified region.
     """
-    # Check if index file exists
-    index_path = f"{bam_path}.bai"
-    if not os.path.exists(index_path):
-        cmd = f"samtools view {bam_path} | wc -l"
-        region_reads_result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, check = True, text = True)
-    else:
-        cmd = [
-            "samtools", "view", "-@", str(NCORES),
-            "-c", 
-            bam_path,
-            f"{chr}:{start}-{end}"
-        ]
-        try:
-            if VERBOSE:
-                print(f"Executing command: {' '.join(cmd)}")
-            region_reads_result = subprocess.run(cmd, stdout=subprocess.PIPE, check = True, text = True)
-        except subprocess.CalledProcessError as e:
-            print(f"Error executing command: {' '.join(cmd)}")
-            print(f"Error message: {e}")
-            raise
+    cmd = [
+        "samtools", "view", "-@", str(NCORES),
+        "-c"
+    ]
+
+    if cell_barcodes:
+        for cb in cell_barcodes:
+            cmd.extend(["-d", f"CB:{cb}"])
+
+    cmd.append(bam_path)
+    cmd.append(f"{chr}:{start}-{end}")
+
+    try:
+        if VERBOSE:
+            print(f"Executing command: {' '.join(cmd)}")
+        region_reads_result = subprocess.run(cmd, stdout=subprocess.PIPE, check = True, text = True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {' '.join(cmd)}")
+        print(f"Error message: {e}")
+        raise
 
     read_count = int(region_reads_result.stdout.strip())
     return read_count
+
+
+def samtools_get_unindexed_read_count(bam_path):
+    """
+    Get the number of reads in a specific region.
+
+    Parameters:
+    ----------
+    bam_path (str): Path to source BAM file.
+    chr (str): Chromosome name
+    start (int): Start position of the region.
+    end (int): End position of the region.
+
+    Returns:
+    -------
+    read_count: Number of reads in the specified region.
+    """
+    cmd = f"samtools view {bam_path} | wc -l"
+    try:
+        if VERBOSE:
+            print(f"Executing command: {cmd}")
+        region_reads_result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, check = True, text = True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {cmd}")
+        print(f"Error message: {e}")
+        raise
+    read_count = int(region_reads_result.stdout.strip())
+    return read_count
+
+
+def samtools_get_entire_read_count(bam_path):
+    """
+    Returns the total number of mapped reads in a BAM file using `samtools idxstats`.
+
+    Parameters:
+    ----------
+    bam_path (str): Path to the BAM file (must be indexed with .bai)
+
+    Returns:
+    -------
+    int: Total number of mapped reads
+    """
+    cmd = ["samtools", "idxstats", bam_path]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        total_mapped_reads = 0
+        for line in result.stdout.strip().split("\n"):
+            fields = line.split("\t")
+            if len(fields) >= 3:
+                mapped = int(fields[2])
+                total_mapped_reads += mapped
+        return total_mapped_reads
+    except subprocess.CalledProcessError as e:
+        print(f"Error running samtools idxstats: {e.stderr}")
+        raise
+
+
+def samtools_sample_reads(bam_path, out_path, frac_reads, region = None, cell_barcodes = None,
+                          seed=5091130):
+    """
+    Sample a fraction of reads from a specific region of a BAM file.
+    
+    Parameters:
+    - bam_path: Input BAM file
+    - out_path: Output BAM file
+    - frac_reads: Fraction of reads to sample (0.0 to 1.0)
+    - region: Genomic region string, e.g., 'chr1:10000-50000'. If None, samples from the whole file.
+    - cell_barcodes: List of cell barcodes to sample from. If None, samples from all reads.
+    - seed: Random seed for reproducibility
+    """
+
+    cmd = [
+        "samtools", "view", "-@", str(NCORES),
+        "--subsample-seed", str(seed),
+        "--subsample", str(frac_reads),
+        "-b"
+    ]
+
+    if cell_barcodes:
+        for cb in cell_barcodes:
+            cmd.extend(["-d", f"CB:{cb}"])
+
+    cmd.append(bam_path)
+
+    if region:
+        cmd.append(region)
+
+    cmd.extend(["-o", out_path])
+
+    try:
+        if VERBOSE:
+            print(f"Executing command: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {' '.join(cmd)}")
+        print(f"Error message: {e}")
+        raise
+    return out_path
 
 
 def samtools_merge(bam_paths, out_path):
@@ -159,10 +275,10 @@ def samtools_merge(bam_paths, out_path):
     try:
         if VERBOSE:
             print(f"Executing command: {' '.join(cmd)}")
-        subprocess.run(cmd, check = True)
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {' '.join(cmd)}")
-        print(f"Error message: {e}")
+        print(f"Error message: {e.stderr.strip()}")
         raise
     return out_path
 
@@ -190,133 +306,145 @@ def get_group_bam_dict(profile_df):
 
     return group_bam_dict
 
-def get_baseline_bam_old(profile_df, group_bam_dict, profile_name):
-    """
-    OLD STUFF USE BASH SCRIPT
-    Get the baseline bam file containing all reads from baseline cells.
-    """
-    # Get the baseline cells
-    baseline_groups = profile_df[profile_df["clone"] == -1]["cell_group"].str.split(",").explode()
-    baseline_cells = profile_df[profile_df["clone"] == -1]["cell_barcode"].str.split(",").explode()
-    all_chromosomes = profile_df.loc[1:, "chr"].unique()
-    print(all_chromosomes)
 
-    baseline_dict = {}
-    for group, barcode in zip(baseline_groups, baseline_cells):
-        baseline_dict.setdefault(group, set()).add(barcode)
-
-    # Create a bam file for the baseline cells
-    combined_bam_path = f"{OUTDIR}/{profile_name}_baseline_cells.bam"
-    with pysam.AlignmentFile(combined_bam_path, "wb", 
-                             template = pysam.AlignmentFile(list(group_bam_dict.values())[0], "rb")) as out_bam:
-        for group, cells in baseline_dict.items():
-            if group not in group_bam_dict:
-                raise ValueError(f"BAM file for group {group} does not exist.")
-
-            print(f"Processing BAM file for baseline cells in group {group}...")
-
-            with pysam.AlignmentFile(group_bam_dict[group], "rb") as in_bam:
-                for chrom in all_chromosomes:
-                    try:
-                        for read in in_bam.fetch(str(chrom)):
-                            if read.qname in cells:
-                                out_bam.write(read)
-                    except ValueError:
-                        print(f"Chromosome {chrom} not found in BAM file for group {group}. Skipping...")
-    print(f"Combined BAM file for baseline cells created at: {combined_bam_path}")
-
-
-def assign_new_barcodes(sampled_cells_reads_dict, baseline_cell_barcodes):
+def assign_new_barcodes(bam_path, baseline_clone_cell_barcodes, output_bam_path):
     
-    return
-
-
-def replace_cell_barcodes(bam_path, new_cb_list, output_bam_path):
-    """
-    Replace cell barcodes in the BAM file with new cell barcodes.
-    """
     bamfile = pysam.AlignmentFile(bam_path, "rb")
     out_bam = pysam.AlignmentFile(output_bam_path, "wb", template=bamfile)
 
+    new_cell_assignments = {}
     for i, read in enumerate(bamfile):
-        if i >= len(new_cb_list):
-            print(f"Warning: Not enough new cell barcodes provided. Stopping at read {i}.")
-            raise ValueError("Not enough new cell barcodes provided.")
-        read.set_tag("CB", new_cb_list[i])
+        read_cell = read.get_tag("CB")
+        if read_cell not in new_cell_assignments:
+            new_cb = np.random.choice(baseline_clone_cell_barcodes)
+            new_cell_assignments[read_cell] = new_cb
+        else:
+            new_cb = new_cell_assignments[read_cell]
+        read.set_tag("CB", new_cell_assignments[read_cell])
         out_bam.write(read)
     bamfile.close()
     out_bam.close()
-
-    if len(new_cb_list) > i:
-        print(f"Warning: {len(new_cb_list) - i} new cell barcodes were not used.")
-    return output_bam_path
-
-
-def remove_reads_from_baseline_bam(baseline_bam_path, profile_row, profile_row_index, TMP_BAMDIR):
-    cell_reads_dict, _ = samtools_get_cell_reads(baseline_bam_path, profile_row.chr,
-                                              profile_row.start, profile_row.end)
-
-    # For each cell, select the reads to keep
-    all_keep_reads = []
-    for cell_barcode, read_ids in cell_reads_dict.items():
-        if profile_row.copy_number == -2:
-            # Remove all reads from this region in the baseline bam file
-            pass
-        elif profile_row.copy_number == -1:
-            # Remove half reads from this region in the baseline bam file
-            n_reads_to_remove = len(read_ids) // 2
-            reads_to_keep = np.random.choice(read_ids, size=n_reads_to_remove, replace=False)
-            if VERBOSE:
-                print(f"Removing {n_reads_to_remove} reads from cell {cell_barcode} in region {profile_row.chr}:{profile_row.start}-{profile_row.end}")
-        elif profile_row.copy_number == 0:
-            # Keep all reads from this region in the baseline bam file
-            reads_to_keep = read_ids
-        else:
-            raise ValueError(f"Invalid copy number: {profile_row.copy_number}")
-        all_keep_reads.extend(reads_to_keep)
-
-    # Save temporary bam file with reads to keep
-    out_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_tmp.bam"
-    samtools_read_id_filter(baseline_bam_path, out_bam_path, all_keep_reads)
-
     if VERBOSE:
-        print(f"Temporary BAM file created: {out_bam_path}")
+        print(f"Temporary BAM file with renamed cell barcodes created: {output_bam_path}")
     return
 
 
-def add_reads_to_baseline_bam(baseline_bam_path, baseline_cell_barcodes, group_bam_dict, 
-                              profile_row, profile_row_index, TMP_BAMDIR):
-    # Check that copy number is greater than 0
-    if profile_row.copy_number <= 0:
-        raise ValueError(f"Copy number must be greater than 0: {profile_row.copy_number}")
+def get_sample_read_counts(profile_row, new_group_cell_dict, baseline_cell_reads_dict, clone_cell_barcodes, group_bam_dict):
+    """
+    Get the number of reads to sample from the baseline bam file and the group bam files for a clone in a region.
+    
+    Parameters:
+    profile_row: Row in the profile dataframe for the region
+    new_group_cell_dict: Dictionary of groups and their corresponding cell barcodes (new cells)
+    baseline_cell_reads_dict: Dictionary of cell barcodes and their corresponding read IDs in the baseline bam file
+    clone_cell_barcodes: List of cell barcodes for the clone
+    group_bam_dict: Dictionary of groups and their corresponding bam file paths
 
-    # Get all necessary groups for this region, assign cell barcodes to groups
-    groups = profile_row.cell_group.split(",")
-    all_cell_barcodes = profile_row.cell_barcode.split(",")
-    group_cell_dict = {}
-    for group, cell_barcode in zip(groups, all_cell_barcodes):
-        if group not in group_bam_dict:
-            raise ValueError(f"BAM file for group {group} does not exist.")
-        group_cell_dict.setdefault(group, []).append(cell_barcode)
-    unique_groups = list(group_cell_dict.keys())
-    group_cell_proportions = np.array([len(group_cell_dict[group]) for group in unique_groups], dtype = float)
+    Returns:
+    n_clone_baseline_reads: # reads for clone in baseline bam file for this region
+    n_clone_additional_reads: # reads to sample from group bam file for clone in this region
+    n_clone_additional_reads_per_group: # reads to sample from each group bam file for clone in this region
+    n_clone_frac_reads_per_group: # fraction of reads to sample from each group bam file for clone in this region
+    """
+
+    # Compute proportion of additional cells in each group
+    group_cell_proportions = np.array([len(new_group_cell_dict[group]) for group in new_group_cell_dict], dtype = float)
     group_cell_proportions /= group_cell_proportions.sum()
     if VERBOSE:
         print(f"Group proportions: {group_cell_proportions}")
 
-    # Figure out how many additional reads to sample based on number of reads in baseline bam file in region
-    n_baseline_reads = samtools_get_read_count(baseline_bam_path, profile_row.chr,
-                                               profile_row.start, profile_row.end)
-    print(n_baseline_reads)
-    n_additional_reads = (n_baseline_reads // 2) * profile_row.copy_number - n_baseline_reads
+    # Figure out how many additional reads to sample based on number of reads in baseline bam file in region for clone
+    n_clone_baseline_reads = sum(len(reads) for cb, reads in baseline_cell_reads_dict.items() if cb in clone_cell_barcodes)
+    n_clone_additional_reads = (n_clone_baseline_reads // 2) * profile_row.copy_number - n_clone_baseline_reads
 
     # Calculate the number of additional reads to sample from each group based on proportion of cells from each group
-    n_additional_reads_per_group_array = np.random.multinomial(n_additional_reads, group_cell_proportions)
-    n_additional_reads_per_group = dict(zip(groups, n_additional_reads_per_group_array))
-    
+    n_clone_additional_reads_per_group_array = np.random.multinomial(n_clone_additional_reads, group_cell_proportions)
+    n_clone_additional_reads_per_group = dict(zip(new_group_cell_dict.keys(), n_clone_additional_reads_per_group_array))
     # Check that the total number of additional reads is equal to the number of reads to sample
-    if sum(n_additional_reads_per_group.values()) != n_additional_reads:
-        raise ValueError(f"Total number of additional reads does not match: {sum(n_additional_reads_per_group.values())} != {n_additional_reads}")
+    if sum(n_clone_additional_reads_per_group.values()) != n_clone_additional_reads:
+        raise ValueError(f"Total number of additional reads does not match: {sum(n_clone_additional_reads_per_group.values())} != {n_clone_additional_reads}")
+    
+    # Need required reads per group / total reads per group
+    frac_reads_per_group = {}
+    for group, n_reads in n_clone_additional_reads_per_group.items():
+        # Total reads in group bam file for this region, new additional cells
+        total_reads_in_group = samtools_get_indexed_read_count(group_bam_dict[group], profile_row.chr,
+                                                               profile_row.start, profile_row.end,
+                                                               cell_barcodes = new_group_cell_dict[group])
+        if VERBOSE:
+            print(f"Total reads in group {group}: {total_reads_in_group}")
+        if total_reads_in_group == 0:
+            raise ValueError(f"Total reads in group {group} is 0: {total_reads_in_group}")
+        frac_reads_per_group[group] = n_reads / total_reads_in_group
+        if frac_reads_per_group[group] > 1:
+            raise ValueError(f"Fraction of reads to sample from group {group} is greater than 1: {frac_reads_per_group[group]}")
+        if VERBOSE:
+            print(f"Fraction of reads to sample from group {group}: {frac_reads_per_group[group]}")
+
+    return n_clone_baseline_reads, n_clone_additional_reads, n_clone_additional_reads_per_group, frac_reads_per_group
+
+
+def remove_reads_from_baseline_bam(baseline_bam_path, profile_row, profile_row_index, clone_row, 
+                                   TMP_BAMDIR):
+    
+    clone_cell_barcodes = clone_row.cell_barcode.split(",")
+    
+    out_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_tmp.bam"
+    
+    if profile_row.copy_number == 0:
+        # No bam file for this region
+        samtools_sample_reads(baseline_bam_path, out_bam_path, 0.0,
+                              region = f"{profile_row.chr}:{profile_row.start}-{profile_row.end}",
+                              cell_barcodes = clone_cell_barcodes)
+    elif profile_row.copy_number == 1:
+        # Remove half reads from this region in the baseline bam file
+        samtools_sample_reads(baseline_bam_path, out_bam_path, 0.5,
+                              region = f"{profile_row.chr}:{profile_row.start}-{profile_row.end}",
+                              cell_barcodes = clone_cell_barcodes)
+    elif profile_row.copy_number == 2:
+        # Select all reads from this region in the baseline bam file
+        samtools_sample_reads(baseline_bam_path, out_bam_path, 1.0,
+                              region = f"{profile_row.chr}:{profile_row.start}-{profile_row.end}",
+                              cell_barcodes = clone_cell_barcodes)
+    else:
+        ValueError(f"Invalid copy number: {profile_row.copy_number}")
+
+    if os.path.exists(out_bam_path):
+        n_reads = samtools_get_unindexed_read_count(out_bam_path)
+        if VERBOSE:
+            print(f"Number of reads in baseline bam file: {n_reads}")
+    else:
+        n_reads = 0
+
+    return out_bam_path, n_reads
+    
+
+def add_reads_to_baseline_bam(baseline_bam_path, group_bam_dict, 
+                              profile_row, profile_row_index, clone_row, TMP_BAMDIR):
+    # Check that copy number is greater than 0
+    if profile_row.copy_number <= 0:
+        raise ValueError(f"Copy number must be greater than 0: {profile_row.copy_number}")
+
+    # Get the cell barcodes for the clone
+    clone_cell_barcodes = clone_row.cell_barcode.split(",")
+    baseline_cell_reads_dict, _ = samtools_get_cell_reads(baseline_bam_path, profile_row.chr,
+                                                          profile_row.start, profile_row.end)
+    missing_clone_barcodes = [cb for cb in clone_cell_barcodes if cb not in baseline_cell_reads_dict]
+    if missing_clone_barcodes:
+        raise ValueError(f"Missing cell barcodes in baseline BAM: {missing_clone_barcodes}")
+
+    # Get all necessary groups for this region, assign cell barcodes to groups
+    new_groups = profile_row.cell_group.split(",")
+    new_cell_barcodes = profile_row.cell_barcode.split(",")
+    new_group_cell_dict = {} # group: [cell_barcode in row]
+    for group, cell_barcode in zip(new_groups, new_cell_barcodes):
+        if group not in group_bam_dict:
+            raise ValueError(f"BAM file for group {group} does not exist.")
+        new_group_cell_dict.setdefault(group, []).append(cell_barcode)
+
+    # Get the number of reads in the baseline bam file for this region
+    n_baseline_reads, n_additional_reads, n_additional_reads_per_group, frac_reads_per_group = get_sample_read_counts(
+        profile_row, new_group_cell_dict, baseline_cell_reads_dict, clone_cell_barcodes, group_bam_dict)
 
     if VERBOSE:
         print(f"Region {profile_row.chr}:{profile_row.start}-{profile_row.end} has {n_baseline_reads} reads in baseline bam file")
@@ -325,47 +453,33 @@ def add_reads_to_baseline_bam(baseline_bam_path, baseline_cell_barcodes, group_b
 
     # For each group, get the bam file and sample reads from the group bam file
     tmp_group_bam_paths = [] # 1 temporary bam file per group
-    sampled_cells_reads_dict = {} # Dictionary to store sampled reads for each cell barcode
-    for group, n_reads in n_additional_reads_per_group.items():
-        print(f"Sampling {n_reads} reads from group {group}")
-        cell_reads_dict, reads_cell_dict = samtools_get_cell_reads(group_bam_dict[group], profile_row.chr,
-                                                                   profile_row.start, profile_row.end)
-        all_group_reads = list(read for sublist in cell_reads_dict.values() for read in sublist)
-        print(len(all_group_reads))
-        print(len(set(all_group_reads)))
-        if len(all_group_reads) < n_reads:
-            raise ValueError(f"Not enough reads in group {group} for region {profile_row.chr}:{profile_row.start}-{profile_row.end}")
-        else:
-            sampled_reads = np.random.choice(all_group_reads, size=n_reads, replace=False)
-            for read in sampled_reads:
-                cell_barcode = reads_cell_dict[read]
-                sampled_cells_reads_dict.setdefault(cell_barcode, []).append(read)
-        if VERBOSE:
-            print(f"Sampling {n_reads} reads from group {group} for region {profile_row.chr}:{profile_row.start}-{profile_row.end}")
+    for group, frac_reads in frac_reads_per_group.items():
+        print(f"Sampling {frac_reads} fraction from group {group}")
+        region_str = f"{profile_row.chr}:{profile_row.start}-{profile_row.end}"
+
+        # Sample reads from the group bam file
         sampled_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_{group}_tmp.bam"
-        samtools_read_id_filter(group_bam_dict[group], sampled_bam_path, sampled_reads)
+        samtools_sample_reads(group_bam_dict[group], sampled_bam_path, frac_reads,
+                              region = region_str, cell_barcodes = new_group_cell_dict[group])
         tmp_group_bam_paths.append(sampled_bam_path)
+
         if VERBOSE:
             print(f"Temporary BAM file created: {sampled_bam_path}")
     
     # Merge the temporary bam files into a single bam file
     merged_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_merged_tmp.bam"
     if len(tmp_group_bam_paths) < 2:
-        n_tmp_reads = samtools_get_read_count(tmp_group_bam_paths[0], profile_row.chr,
-                                               profile_row.start, profile_row.end)
-        if n_tmp_reads != n_additional_reads:
-            raise ValueError(f"Number of reads in temporary bam file does not match: {n_tmp_reads} != {n_additional_reads}")
-        os.rename(tmp_group_bam_paths[0], merged_bam_path)
+        n_tmp_reads = samtools_get_unindexed_read_count(tmp_group_bam_paths[0])
+        if VERBOSE:
+            print(f"# reads in merged bam: {n_tmp_reads}, # additional reads: {n_additional_reads}")
+        shutil.move(tmp_group_bam_paths[0], merged_bam_path)
     else:
         samtools_merge(tmp_group_bam_paths, merged_bam_path)
         if VERBOSE:
             print(f"Merged BAM file created: {merged_bam_path}")
 
     # Check that the number of reads in the merged bam file is equal to the number of additional reads
-    n_merged_reads = samtools_get_read_count(merged_bam_path, profile_row.chr,
-                                             profile_row.start, profile_row.end)
-    if n_merged_reads != n_additional_reads:
-        raise ValueError(f"Number of reads in merged bam file does not match: {n_merged_reads} != {n_additional_reads}")
+    n_merged_reads = samtools_get_unindexed_read_count(merged_bam_path)
     if VERBOSE:
         print(f"Number of reads in merged bam file: {n_merged_reads}")
 
@@ -376,37 +490,56 @@ def add_reads_to_baseline_bam(baseline_bam_path, baseline_cell_barcodes, group_b
             if VERBOSE:
                 print(f"Temporary BAM file deleted: {tmp_bam_path}")
 
-    # Randomly assign each new read to a baseline cell barcode - not guaranteed equal distribution
-    # new_cell_barcodes = list(np.random.choice(baseline_cell_barcodes, size=n_additional_reads, replace=True))
-    new_cell_barcodes = assign_new_barcodes(sampled_cells_reads_dict, baseline_cell_barcodes)
+    # Replace the cell barcodes in the merged bam file with the new cell barcodes
+    renamed_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_renamed_tmp.bam"
+    assign_new_barcodes(merged_bam_path, clone_cell_barcodes, renamed_bam_path)
+    
     if VERBOSE:
-        print(f"{len(new_cell_barcodes)} new cell barcodes assigned to sampled reads")
+        print(f"Temporary BAM file with renamed cell barcodes created: {renamed_bam_path}")
 
-    # Rename the cell barcodes in the sampled reads to match the baseline bam file
-    out_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_tmp.bam"
-    replace_cell_barcodes(merged_bam_path, new_cell_barcodes, out_bam_path)
-    
-    if VERBOSE:
-        print(f"Temporary BAM file with renamed cell barcodes created: {out_bam_path}")
-    
     # Remove the merged bam file
     os.remove(merged_bam_path)
     if VERBOSE:
         print(f"Merged BAM file deleted: {merged_bam_path}")
+    
+    # Get original reads from baseline bam file
+    baseline_clone_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_baseline_tmp.bam"
+    samtools_sample_reads(baseline_bam_path, baseline_clone_path, 1.0,
+                          region = f"{profile_row.chr}:{profile_row.start}-{profile_row.end}",
+                          cell_barcodes = clone_cell_barcodes)
+    
+    out_bam_path = f"{TMP_BAMDIR}/row_{profile_row_index}_{profile_row.chr}_{profile_row.start}_{profile_row.end}_tmp.bam"
+    # Merge the renamed bam file with the baseline bam file
+    samtools_merge([baseline_clone_path, renamed_bam_path], out_bam_path)
+    if VERBOSE:
+        print(f"Final BAM file created: {out_bam_path}")
+    # Remove the renamed bam file
+    os.remove(renamed_bam_path)
+    if VERBOSE:
+        print(f"Renamed BAM file deleted: {renamed_bam_path}")
+    # Remove the baseline bam file
+    os.remove(baseline_clone_path)
+    if VERBOSE:
+        print(f"Baseline BAM file deleted: {baseline_clone_path}")
+
+    return out_bam_path, n_merged_reads
+
+
+def normalize_final_bam(baseline_bam_path, bam_path, out_path, n_final_reads):
+
+    n_baseline_reads = samtools_get_entire_read_count(baseline_bam_path)
+    
+    sample_frac = n_baseline_reads / n_final_reads
+    if sample_frac > 1:
+        print(f"Sample fraction is greater than 1: {sample_frac}. Sampling from baseline bam file.")
+        shutil.copy(baseline_bam_path, out_path)
+    else:
+        samtools_sample_reads(bam_path, out_path, sample_frac)
+
+    if VERBOSE:
+        print(f"Final BAM file created: {out_path}")
 
     return
-
-
-def get_read_count_range(profile_df):
-    all_normal_cells_df = pd.read_csv(f"{BASEDIR}/data/all_normal_cells.csv")
-    baseline_cells = profile_df[profile_df["clone"] == -1]["cell_barcode"].str.split(",").explode()
-
-    baseline_cells_df = all_normal_cells_df[all_normal_cells_df["cell_barcode"].isin(baseline_cells)]
-    read_count_range = baseline_cells_df["total_mapped_reads"].min(), baseline_cells_df["total_mapped_reads"].max()
-    print(f"Read count range: {read_count_range}")
-
-    return read_count_range
-
 
 
 def sample_cnv_reads(profile_name, group_name):
@@ -424,32 +557,60 @@ def sample_cnv_reads(profile_name, group_name):
         # Save total number of cells in baseline
     baseline_bam_path = f"{OUTDIR}/{profile_name}_baseline_cells.bam"
     if not os.path.exists(baseline_bam_path):
-        ValueError(f"Baseline BAM file does not exist: {baseline_bam_path}")
+        raise ValueError(f"Baseline BAM file does not exist: {baseline_bam_path}")
 
     # Get list of all baseline cells
     baseline_cell_barcodes = profile_df[profile_df["clone"] == -1]["cell_barcode"].str.split(",").explode()
 
     TMP_BAMDIR = f"{OUTDIR}/{profile_name}_intermediate_bams"
     os.makedirs(TMP_BAMDIR, exist_ok=True)
+
+    n_clones = profile_df["clone"].nunique() - 1 # -1 for baseline cells
+    clone_profile_df = profile_df[(profile_df["clone"] != -1) & (profile_df["chr"] == 0)]
+
+    cnv_profile_df = profile_df[(profile_df["clone"] != -1) & (profile_df["chr"] != 0)]
     
     # For every row in the profile df (except for first row, which is baseline cells)
-    for index, row in profile_df.iterrows():
-        if index == 0:
-            continue
-        break
-        # remove_reads_from_baseline_bam(group_bam_dict, row, index)
-        # If copy number is 0, skip this region
-        # TODO: Function to remove reads from the baseline bam file
-            # If copy number is -1, remove half reads from this region in the baseline bam file
-            # If copy number is -2, remove all reads from this region in the baseline bam file
-        # TODO: Function to sample reads from group bam file (parameters = row in profile df, number of reads to sample)
-            # Else sample reads (# reads in baseline bam file for this region) from each of cells in cell_barcode column
-            # Remember to reassign cell barcodes to the sampled reads
-                # For each cell in the baseline bam file, reorder the cell barcode order randomly
-                # Assign the new cell barcodes to the sampled reads
+    all_tmp_bam_paths = []
+    total_reads = 0
+    for index, row in cnv_profile_df.iterrows():
+        # Get the clone row
+        cur_row_clone = row["clone"]
+        clone_row = profile_df.iloc[cur_row_clone + 1]
+        cur_copy_number = row["copy_number"]
 
+        print(f"Processing row {index} for clone {cur_row_clone} with copy number {cur_copy_number}")
+
+        if cur_copy_number <= 2:
+            tmp_bam_path, readcount = remove_reads_from_baseline_bam(baseline_bam_path, row, index, clone_row, TMP_BAMDIR)
+        else:
+            tmp_bam_path, readcount = add_reads_to_baseline_bam(baseline_bam_path, group_bam_dict, row, index, clone_row, TMP_BAMDIR)
+        all_tmp_bam_paths.append(tmp_bam_path)
+        total_reads += readcount
+
+    # Merge all the temporary bam files into a single bam file
+    merged_bam_path = f"{OUTDIR}/{profile_name}_{group_name}_cnv.bam"
+    if len(all_tmp_bam_paths) < 2:
+        n_tmp_reads = samtools_get_unindexed_read_count(all_tmp_bam_paths[0])
+        if VERBOSE:
+            print(f"# reads in merged bam: {n_tmp_reads}")
+        shutil.move(all_tmp_bam_paths[0], merged_bam_path)
+    else:
+        samtools_merge(all_tmp_bam_paths, merged_bam_path)
+        if VERBOSE:
+            n_total_reads = samtools_get_unindexed_read_count(merged_bam_path)
+            print(f"Total number of reads in merged bam file: {n_total_reads}")
+            print(f"Sum of reads in temporary bam files: {total_reads}")
+            print(f"Merged BAM file created: {merged_bam_path}")
+
+    # Remove all files in intermediate bam directory
+    if os.path.exists(TMP_BAMDIR):
+        shutil.rmtree(TMP_BAMDIR)
+        if VERBOSE:
+            print(f"Temporary BAM directory deleted: {TMP_BAMDIR}")
 
     # TODO: Function to sample original number of reads from the modified bam file
+    normalize_final_bam(baseline_bam_path, merged_bam_path, merged_bam_path, total_reads)
 
     return
 
@@ -469,7 +630,5 @@ if __name__ == "__main__":
     # args = parser.parse_args()
 
     # profile_path = args.profile_path
-    group_name = "sg0_500cells"
-    profile_name = "minitest_c3_8"
 
     main()
