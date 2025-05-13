@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=baseline_bam
-#SBATCH --output=logs/baseline_bam.log
+#SBATCH --output=logs/baseline_bam_%a.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
@@ -19,8 +19,8 @@ BASEDIR="/data1/shahs3/users/sunge/cnv_simulator"
 OUTDIR="${BASEDIR}/synthetic_bams"
 GROUP_BAM_DIR="${BASEDIR}/data/normal_cell_bams"
 
-PROFILE_NAME="minitest_c3_8"
-GROUP_NAME="sg0_500cells"
+PROFILE_NAME="minitest_c2_5"
+GROUP_NAME=""
 
 if [ -z "$GROUP_NAME" ]; then
     PROFILE_PATH="${BASEDIR}/data/small_cnv_profiles/${PROFILE_NAME}_cnv_profile.tsv"

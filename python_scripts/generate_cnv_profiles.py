@@ -158,6 +158,8 @@ def generate_cnv_profile(num_clones, num_cnvs_per_clone, chr_lst, chr_lengths_df
 
     # Check if cnvs can fit in chromosomes
     total_chr_length = chr_lengths_df[chr_lengths_df['chr'].isin(chr_lst)]['length'].sum()
+    print(num_cnvs_per_clone)
+    print(min_cnv_size, max_cnv_size)
     for num_cnvs in num_cnvs_per_clone:
         total_max_cnv_size = num_cnvs * max_cnv_size
         if total_max_cnv_size > total_chr_length:
@@ -451,11 +453,9 @@ def main(profile_input, cnv_profile_name = None, group_name = None):
             cell_cnv_profile.to_csv(cnv_profile_path, sep = "\t", index = False)
     else:
         # Select the CNV profile from the input
-        profile_input_row = profile_input[profile_input["test_id"] == cnv_profile_name]
+        profile_input_row = profile_input[profile_input["test_id"] == cnv_profile_name].squeeze()
         if len(profile_input_row) == 0:
             raise ValueError(f"CNV profile {cnv_profile_name} not found in the input file.")
-        
-        print(profile_input_row["possible_copy_numbers"])
 
         # Load the CNV profile from the specified path
         cnv_profile_path = f"{DATADIR}/small_cnv_profiles/{cnv_profile_name}_cnv_profile.tsv"
@@ -468,7 +468,7 @@ def main(profile_input, cnv_profile_name = None, group_name = None):
         else:
             cnv_profile = pd.read_csv(cnv_profile_path, sep = "\t")
             # Remove the first row (baseline cells) and existing cell barcodes
-            cnv_profile = cnv_profile[cnv_profile["clone"] != -1]
+            cnv_profile = cnv_profile[cnv_profile["chr"] != 0]
             cnv_profile = cnv_profile.drop(columns=["cell_barcode", "cell_group"])
 
             # Get the parameters from the profile input
