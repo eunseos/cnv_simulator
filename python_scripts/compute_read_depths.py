@@ -1,116 +1,157 @@
 #%%
 import os
 import sys
+import logging
+
 env_name = os.environ.get("CONDA_DEFAULT_ENV")
 print(f"Current conda environment: {env_name}")
-
-print(sys.executable)
+print(f"Python executable: {sys.executable}")
 
 import pandas as pd
 import numpy as np
 import pysam
 import argparse
-import subprocess
-import tempfile
-import shutil
+from collections import defaultdict
+from tqdm import tqdm
+import scipy.sparse as sp
+
 
 BASEDIR = "/data1/shahs3/users/sunge/cnv_simulator"
-BAMDIR = f"{BASEDIR}/synthetic_bams"
-
-VERBOSE = True
-NCORES = 32
 
 #%%
 
-def samtools_select_reads(bam_path, out_path, region = None, cell_barcodes = None):
+def get_cell_barcodes(cell_profile_path):
     """
-    Select reads from a BAM file based on cell barcodes and region.
+    Get the cell barcodes from the cell profile file.
     """
+    cell_profile_df = pd.read_csv(cell_profile_path, sep="\t")
+    cell_barcodes_str = cell_profile_df[cell_profile_df["clone"] == -1]["cell_barcode"].iloc[0]
+    cell_barcodes = [x.strip() for x in cell_barcodes_str.split(",")]
+    return cell_barcodes
 
-    cmd = [
-        "samtools", "view", "-@", str(NCORES),
-        "-b"
-    ]
+def parse_bins(gene_windows_path, chr_set):
+    """
+    Parse the gene windows file to get the bins.
+    """
+    bins = []
+    with open(gene_windows_path) as f:
+        for line in f:
+            chrom, start, end = line.strip().split()[:3]
+            if chrom in chr_set:
+                bins.append((chrom, int(start), int(end)))
+    return bins
 
-    if cell_barcodes:
-        for cb in cell_barcodes:
-            cmd.extend(["-d", f"CB:{cb}"])
+def compute_read_depths(profile_dir, profile_name, bam_filename, bin_size, gene_windows_path):
+    bam_file = f"{profile_dir}/{bam_filename}"
+    cell_profile_path = f"{profile_dir}/{profile_name}_cell_profile.tsv"
+    depth_output_path = f"{profile_dir}/{bam_filename}.{bin_size}_read_depth.npz"
+    bins_output_path = f"{profile_dir}/{bam_filename}.{bin_size}_bins.tsv"
+    barcodes_output_path = f"{profile_dir}/{bam_filename}.{bin_size}_cell_barcodes.tsv"
 
-    cmd.append(bam_path)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Computing read depths for {bam_file}...")
 
-    if region:
-        cmd.append(region)
+    # Get list of chromosomes from the BAM file
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        chr_set = set(bam.references)
+        logger.info(f"Chromosomes in BAM file: {chr_set}")
 
-    cmd.extend(["-o", out_path])
+    cell_barcodes = get_cell_barcodes(cell_profile_path)
+    cell_idx_map = {cb: i for i, cb in enumerate(cell_barcodes)}
+    bins = parse_bins(gene_windows_path, chr_set)
+    logger.info(f"Number of cells: {len(cell_barcodes)}")
+    logger.info(f"Number of bins: {len(bins)}")
 
-    try:
-        if VERBOSE:
-            print(f"Executing command: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing command: {' '.join(cmd)}")
-        print(f"Error message: {e}")
-        raise
+    # Create a sparse matrix to store the read depths
+    num_cells = len(cell_barcodes)
+    num_bins = len(bins)
 
-    # Index the output BAM file
-    index_cmd = ["samtools", "index", "-@", str(NCORES), out_path]
-    try:
-        if VERBOSE:
-            print(f"Indexing command: {' '.join(index_cmd)}")
-        subprocess.run(index_cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Error indexing BAM file: {' '.join(index_cmd)}")
-        print(f"Error message: {e}")
-        raise
-    return out_path
+    data = []
+    row_idx = []
+    col_idx = []
 
-
-def mosdepth_run(bam_path, output_prefix):    
-    cmd = [
-        "/home/sunge/conda_envs/scanpy_env/bin/mosdepth",
-        "--no-per-base",
-        "--fast-mode",
-        "--threads", str(NCORES),
-        "--by", "1000",
-        output_prefix,
-        bam_path
-    ]
-    subprocess.run(cmd, check=True)
-    if VERBOSE:
-        print(f"mosdepth command: {' '.join(cmd)}")
-
-    return
-
-def main():
-    test_name = "minitest_c3_9_sg0_500cells"
-
-    bam_path = f"{BAMDIR}/{test_name}_cnv.bam"
-    profile_path = f"{BASEDIR}/data/small_cnv_profiles/{test_name}_cnv_profile.tsv"
-
-    profile_df = pd.read_csv(profile_path, sep="\t")
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        for bin_i, (chrom, start, end) in tqdm(enumerate(bins), total = num_bins, desc = "Processing bins"):
+            counts = defaultdict(int)
+            for read in bam.fetch(chrom, start, end):
+                if read.is_secondary or read.is_supplementary:
+                    continue
+                if read.has_tag("CB"):
+                    cb = read.get_tag("CB")
+                    if cb in cell_idx_map:
+                        counts[cb] += 1
+            for cb, count in counts.items():
+                row_idx.append(bin_i)
+                col_idx.append(cell_idx_map[cb])
+                data.append(count)
     
-    for clone in profile_df["clone"].unique():
-        clone_row = profile_df.loc[(profile_df["clone"] == clone) & (profile_df["chr"] == 0)]
-        clone_cell_barcodes = clone_row["cell_barcode"].values[0].split(",")
+    coverage_matrix = sp.coo_matrix((data, (row_idx, col_idx)), shape=(num_bins, num_cells))
+    sp.save_npz(depth_output_path, coverage_matrix)
+    logger.info(f"Saved read depth matrix to {depth_output_path}")
 
-        output_prefix = f"{BAMDIR}/{test_name}_cnv_depth/clone{clone}"
-        tmp_bam_path = f"{BAMDIR}/{test_name}_cnv_depth/tmp.bam"
+    # Save the cell barcodes and bin information
+    with open(bins_output_path, "w") as f:
+        for chrom, start, end in bins:
+            f.write(f"{chrom}\t{start}\t{end}\n")
+    logger.info(f"Saved bin information to {bins_output_path}")
 
-        # Select reads from the BAM file based on cell barcodes
-        selected_bam_path = samtools_select_reads(bam_path, tmp_bam_path, cell_barcodes=clone_cell_barcodes)
-        # Run mosdepth on the selected BAM file
-        mosdepth_run(selected_bam_path, output_prefix)
-        # Clean up the temporary BAM file
-        if os.path.exists(tmp_bam_path):
-            os.remove(tmp_bam_path)
-        else:
-            print(f"Temporary BAM file {tmp_bam_path} does not exist.")
+    with open(barcodes_output_path, "w") as f:
+        for cb in cell_barcodes:
+            f.write(f"{cb}\n")
+    logger.info(f"Saved cell barcodes to {barcodes_output_path}")
+    
     return
 
+
+#%%
 def parse_args():
     parser = argparse.ArgumentParser(description="Compute read depths from BAM files.")
-    parser.add_argument("--test_name", type=str, required=True, help="Name of the test.")
+    parser.add_argument("--profile_dir", type=str, required=True, help="Directory containing all profile files.")
+    parser.add_argument("--profile_name", type=str, required=True, help="Name of the profile file.")
+    parser.add_argument("--bam_filename", type=str, required=True, help="Name of the BAM file.")
+    parser.add_argument("--bin_size", type=int, default=10000, help="Size of the bins in base pairs.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
     return parser.parse_args()
+
+def main():
+    args = parse_args()
+    profile_dir = args.profile_dir
+    profile_name = args.profile_name
+    bam_filename = args.bam_filename
+    bin_size = args.bin_size
+    verbose = args.verbose
+
+    # Set up logging
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+    # Check if the profile directory exists
+    if not os.path.exists(profile_dir):
+        logging.error(f"Profile directory {profile_dir} does not exist.")
+        sys.exit(1)
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"Using profile directory: {profile_dir}")
+    logger.info(f"Using profile name: {profile_name}")
+
+    gene_windows_path = f"{BASEDIR}/data/genome_{bin_size // 1000}kb_bins.bed"
+
+    bam_path = f"{profile_dir}/{bam_filename}"
+    if not os.path.exists(bam_path):
+        logger.error(f"BAM file {bam_path} does not exist.")
+        sys.exit(1)
+    # Check if the BAM file is indexed
+    if not os.path.exists(f"{bam_path}.bai"):
+        logger.info(f"Indexing BAM file {bam_path}...")
+        pysam.index(bam_path)
+    
+    cell_profile_path = f"{profile_dir}/{profile_name}_cell_profile.tsv"
+    output_path = f"{profile_dir}/{bam_filename}.{bin_size}_read_depth.npz"
+
+    compute_read_depths(profile_dir, profile_name, bam_filename, bin_size, gene_windows_path)
+
+    return
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=baseline_bam
-#SBATCH --output=logs/baseline_bam_%a.log
+#SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
-#SBATCH --time=5:00:00
+#SBATCH --time=1:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -14,29 +14,36 @@ module load samtools
 # Print current date and time
 echo "Current date and time: $(date)"
 
+PROFILE_NAME=$1
+GROUP_NAME=$2
+if [ -z "$PROFILE_NAME" ]; then
+    echo "Error: No profile name provided."
+    exit 1
+fi
+echo "Profile name: $PROFILE_NAME"
+echo "Group name: $GROUP_NAME"
+
 # Define variables
 BASEDIR="/data1/shahs3/users/sunge/cnv_simulator"
-OUTDIR="${BASEDIR}/synthetic_bams"
 GROUP_BAM_DIR="${BASEDIR}/data/normal_cell_bams"
+PROFILE_DIR="${BASEDIR}/synthetic_bams_2/${PROFILE_NAME}"
 
-PROFILE_NAME="minitest_c2_5"
-GROUP_NAME=""
 
 if [ -z "$GROUP_NAME" ]; then
-    PROFILE_PATH="${BASEDIR}/data/small_cnv_profiles/${PROFILE_NAME}_cnv_profile.tsv"
+    PROFILE_PATH="${PROFILE_DIR}/${PROFILE_NAME}_cell_profile.tsv"
 else
-    PROFILE_PATH="${BASEDIR}/data/small_cnv_profiles/${PROFILE_NAME}_${GROUP_NAME}_cnv_profile.tsv"
+    PROFILE_PATH="${PROFILE_DIR}/${PROFILE_NAME}_${GROUP_NAME}_cell_profile.tsv"
 fi
-OUT_BAM_PATH="${OUTDIR}/${PROFILE_NAME}_baseline_cells.bam"
+OUT_BAM_PATH="${PROFILE_DIR}/${PROFILE_NAME}_baseline_cells.bam"
 
 # Create output directory if it doesn't exist
-mkdir -p "$OUTDIR"
+mkdir -p "$PROFILE_DIR"
 
 echo "Reading profile: $PROFILE_PATH"
 
 # Extract baseline cells and groups
-BASELINE_GROUPS_UNIQUE=$(awk -F'\t' '$1 == -1 {print $9}' "$PROFILE_PATH" | tr ',' '\n' | sort -u)
-ALL_CHROMOSOMES=$(awk -F'\t' 'NR > 2 {print $2}' "$PROFILE_PATH" | sort -u)
+BASELINE_GROUPS_UNIQUE=$(awk -F'\t' '$1 == -1 {gsub(/"/, "", $9); print $9}' "$PROFILE_PATH" | tr ',' '\n' | sort -u)
+ALL_CHROMOSOMES=$(awk -F'\t' 'NR > 2 && $2 != 0 {print $2}' "$PROFILE_PATH" | sort -u)
 
 echo "Chromosomes: $ALL_CHROMOSOMES"
 echo "Baseline groups (unique): $BASELINE_GROUPS_UNIQUE"
@@ -60,9 +67,11 @@ for group in $BASELINE_GROUPS_UNIQUE; do
     echo "Processing group $group..."
 
     # Get barcodes for this group
-    GROUP_BARCODES=$(awk -F'\t' -v group="$group" '$1 == -1 { 
-        split($8, cells, ","); 
-        split($9, groups, ","); 
+    GROUP_BARCODES=$(awk -F'\t' -v group="$group" '$1 == -1 {
+        gsub(/"/, "", $8);
+        gsub(/"/, "", $9);
+        split($8, cells, ",");
+        split($9, groups, ",");
         for (i = 1; i <= length(groups); i++) {
             if (groups[i] == group) {
                 print cells[i]
@@ -81,7 +90,7 @@ for group in $BASELINE_GROUPS_UNIQUE; do
     BARCODE_FILTERS=$(echo "$GROUP_BARCODES" | awk '{print "-d CB:"$1}' | tr '\n' ' ')
 
     # Define temporary BAM file for this group
-    OUT_BAM_TMP="${OUTDIR}/${PROFILE_NAME}_${group}_baseline_cells_tmp.bam"
+    OUT_BAM_TMP="${PROFILE_DIR}/${PROFILE_NAME}_${group}_baseline_cells_tmp.bam"
 
     # Write the temporary BAM file with select chromosomes and cells to the merge list
     read -ra BARCODE_ARGS <<< "$BARCODE_FILTERS"

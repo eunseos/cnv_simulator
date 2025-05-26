@@ -1,54 +1,15 @@
-import pandas as pd
-import numpy as np
 import os
-import sys
-import pysam
-import isabl_cli as ii
 import subprocess
 import logging
 import tempfile
 
 ##################################################################
-# ISABEL UTILS
-##################################################################
-
-def get_data_paths(aliquot_id_lst):
-    """
-    Get bam and gc metrics paths for a given aliquot_id.
-    """
-    data_path_dict = {"aliquot_id": [], "bam_path": [], "gc_metrics_path": []}
-    for aliquot_id in aliquot_id_lst:
-        # Get the bam path from the filtered cell table
-        search_results = ii.get_analyses(
-            application__name__in=['MONDRIAN-ALIGNMENT'],
-            targets__aliquot__identifier=aliquot_id,
-            status='SUCCEEDED',
-            limit=100,
-        )
-
-        if (search_results == False) or (len(search_results) == 0):
-            print(f"Search for {aliquot_id} returned {len(search_results)} results. Please check the analysis.")
-            continue
-        else:
-            bam_path = search_results[0].results.bam
-            gc_metrics_path = search_results[0].results.gc_metrics
-        
-        # Check if the bam path is valid
-        if not os.path.exists(bam_path):
-            raise ValueError(f"BAM file does not exist: {bam_path}")
-        
-        # Append the bam path to the list
-        data_path_dict["aliquot_id"].append(aliquot_id)
-        data_path_dict["bam_path"].append(bam_path)
-        data_path_dict["gc_metrics_path"].append(gc_metrics_path)
-    
-    return data_path_dict
-
-##################################################################
 # SAMTOOLS UTILS
 ##################################################################
 
-def samtools_read_id_filter(bam_path, out_path, read_ids, logger, NCORES = 16, VERBOSE = False):
+logger = logging.getLogger(__name__)
+
+def samtools_read_id_filter(bam_path, out_path, read_ids, NCORES = 16):
     """
     Saves new bam file with only the specified read IDs.
     """
@@ -56,13 +17,11 @@ def samtools_read_id_filter(bam_path, out_path, read_ids, logger, NCORES = 16, V
         for rid in read_ids:
             tmp.write(f"{rid}\n")
         tmp_path = tmp.name
-        if VERBOSE:
-            logger.debug(f"Temporary file created: {tmp_path}")
+        logger.debug(f"Temporary file created: {tmp_path}")
 
     # Print number of read IDs to be filtered
-    if VERBOSE:
-        logger.debug(f"Number of read IDs to filter: {len(read_ids)}")
-        logger.debug(f"Read IDs: {read_ids[:10]}...")
+    logger.debug(f"Number of read IDs to filter: {len(read_ids)}")
+    logger.debug(f"Read IDs: {read_ids[:10]}...")
 
     try:
         cmd = [
@@ -70,19 +29,16 @@ def samtools_read_id_filter(bam_path, out_path, read_ids, logger, NCORES = 16, V
             "-b", "-N", tmp_path, bam_path,
             "-o", out_path
         ]
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         subprocess.run(cmd, check = True)
     finally:
         os.remove(tmp_path)
-        if VERBOSE:
-            logger.debug(f"Temporary file deleted: {tmp_path}")
+        logger.debug(f"Temporary file deleted: {tmp_path}")
     
     return out_path
 
 
-def samtools_get_cell_reads(bam_path, logger, chr = None, start = None, end = None,
-                            NCORES = 16, VERBOSE = False):
+def samtools_get_cell_reads(bam_path, region = None, NCORES = 32):
     """
     Get the reads in a specific region sorted by cell barcode.
 
@@ -101,11 +57,10 @@ def samtools_get_cell_reads(bam_path, logger, chr = None, start = None, end = No
         "samtools", "view", "-@", str(NCORES),
         bam_path
     ]
-    if chr and start and end:
-        cmd.append(f"{chr}:{start}-{end}")
+    if region:
+        cmd.append(region)
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         region_reads_result = subprocess.run(cmd, stdout=subprocess.PIPE, check = True, text = True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
@@ -125,18 +80,17 @@ def samtools_get_cell_reads(bam_path, logger, chr = None, start = None, end = No
     return cell_reads_dict, reads_cell_dict
 
 
-def samtools_get_group_read_count(group_bam_dict, chr, start, end):
+def samtools_get_group_read_count(group_bam_dict, region):
     """
     Get the number of reads in the group_bam_dict for given region.
     """
     group_bam_length_dict = {}
     for group, bam_path in group_bam_dict.items():
-        group_bam_length_dict[group] = samtools_get_indexed_read_count(bam_path, chr, start, end)
+        group_bam_length_dict[group] = samtools_get_indexed_read_count(bam_path, region)
     return group_bam_length_dict
 
 
-def samtools_get_indexed_read_count(bam_path, chr, start, end, logger, cell_barcodes = None,
-                                    NCORES = 16, VERBOSE = False):
+def samtools_get_indexed_read_count(bam_path, region = None, cell_barcodes = None, NCORES = 32):
     """
     Get the number of reads in a specific region.
 
@@ -161,11 +115,12 @@ def samtools_get_indexed_read_count(bam_path, chr, start, end, logger, cell_barc
             cmd.extend(["-d", f"CB:{cb}"])
 
     cmd.append(bam_path)
-    cmd.append(f"{chr}:{start}-{end}")
+
+    if region:
+        cmd.append(region)
 
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         region_reads_result = subprocess.run(cmd, stdout=subprocess.PIPE, check = True, text = True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
@@ -176,7 +131,7 @@ def samtools_get_indexed_read_count(bam_path, chr, start, end, logger, cell_barc
     return read_count
 
 
-def samtools_get_unindexed_read_count(bam_path, logger, VERBOSE = False):
+def samtools_get_unindexed_read_count(bam_path):
     """
     Get the number of reads in a specific region.
 
@@ -193,8 +148,7 @@ def samtools_get_unindexed_read_count(bam_path, logger, VERBOSE = False):
     """
     cmd = f"samtools view {bam_path} | wc -l"
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {cmd}")
+        logger.debug(f"Executing command: {cmd}")
         region_reads_result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, check = True, text = True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {cmd}")
@@ -204,7 +158,7 @@ def samtools_get_unindexed_read_count(bam_path, logger, VERBOSE = False):
     return read_count
 
 
-def samtools_get_entire_read_count(bam_path, logger):
+def samtools_get_entire_read_count(bam_path):
     """
     Returns the total number of mapped reads in a BAM file using `samtools idxstats`.
 
@@ -237,8 +191,8 @@ def samtools_get_entire_read_count(bam_path, logger):
         raise
 
 
-def samtools_sample_reads(bam_path, out_path, frac_reads, logger, region = None, cell_barcodes = None,
-                          seed=5091130, NCORES = 16, VERBOSE = False):
+def samtools_sample_reads(bam_path, out_path, frac_reads, region = None, cell_barcodes = None,
+                          seed=5091130, NCORES = 32):
     """
     Sample a fraction of reads from a specific region of a BAM file.
     
@@ -270,8 +224,7 @@ def samtools_sample_reads(bam_path, out_path, frac_reads, logger, region = None,
     cmd.extend(["-o", out_path])
 
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
@@ -280,7 +233,47 @@ def samtools_sample_reads(bam_path, out_path, frac_reads, logger, region = None,
     return out_path
 
 
-def samtools_merge(bam_paths, out_path, logger, NCORES = 16, VERBOSE = False):
+def samtools_get_reads(bam_path, out_path, region = None, cell_barcodes = None,
+                       NCORES = 32):
+    """
+    Subset all reads from a specific region of a BAM file with specified barcodes.
+    
+    Parameters:
+    - bam_path: Input BAM file
+    - out_path: Output BAM file
+    - frac_reads: Fraction of reads to sample (0.0 to 1.0)
+    - region: Genomic region string, e.g., 'chr1:10000-50000'. If None, samples from the whole file.
+    - cell_barcodes: List of cell barcodes to sample from. If None, samples from all reads.
+    - seed: Random seed for reproducibility
+    """
+
+    cmd = [
+        "samtools", "view", "-@", str(NCORES),
+        "-b"
+    ]
+
+    if cell_barcodes:
+        for cb in cell_barcodes:
+            cmd.extend(["-d", f"CB:{cb}"])
+
+    cmd.append(bam_path)
+
+    if region:
+        cmd.append(region)
+
+    cmd.extend(["-o", out_path])
+
+    try:
+        logger.debug(f"Executing command: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing command: {' '.join(cmd)}")
+        logger.error(f"Error message: {e}")
+        raise
+    return out_path
+
+
+def samtools_merge(bam_paths, out_path, NCORES = 32):
     """
     Merge multiple BAM files into a single BAM file.
 
@@ -299,8 +292,7 @@ def samtools_merge(bam_paths, out_path, logger, NCORES = 16, VERBOSE = False):
         *bam_paths
     ]
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         subprocess.run(cmd, check=True, stderr=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
@@ -308,7 +300,7 @@ def samtools_merge(bam_paths, out_path, logger, NCORES = 16, VERBOSE = False):
         raise
     return out_path
 
-def samtools_index(bam_path, logger, NCORES = 16, VERBOSE = False):
+def samtools_index(bam_path, NCORES = 32):
     """
     Index a BAM file.
 
@@ -325,15 +317,14 @@ def samtools_index(bam_path, logger, NCORES = 16, VERBOSE = False):
         bam_path
     ]
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
         logger.error(f"Error message: {e}")
         raise
 
-def samtools_sort(bam_path, out_path, logger, NCORES = 16, VERBOSE = False):
+def samtools_sort(bam_path, out_path, NCORES = 32):
     """
     Sort a BAM file.
 
@@ -352,11 +343,66 @@ def samtools_sort(bam_path, out_path, logger, NCORES = 16, VERBOSE = False):
         bam_path
     ]
     try:
-        if VERBOSE:
-            logger.debug(f"Executing command: {' '.join(cmd)}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing command: {' '.join(cmd)}")
         logger.error(f"Error message: {e}")
         raise
+    return out_path
+
+
+##################################################################
+### BEDTOOLS UTILS
+##################################################################
+
+def get_genomic_windows(bin_size, chr_lengths_path, out_path):
+    """
+    Generate genomic windows of a specified size for each chromosome.
+
+    Parameters:
+    ----------
+    bin_size (int): Size of the bins in base pairs.
+    chr_lengths_path (str): Path to the file containing chromosome lengths.
+    out_path (str): Path to the output bed file.
+
+    Returns:
+    -------
+    None
+    """
+    cmd = [
+        "bedtools", "makewindows",
+        "-g", chr_lengths_path,
+        "-w", str(bin_size)
+    ]
+    
+    with open(out_path, 'w') as out_file:
+        subprocess.run(cmd, stdout=out_file, check=True)
+    return out_path
+
+
+def get_bin_coverage(bam_path, bin_bed_path, out_path):
+    """
+    Calculate the coverage of each bin in a BAM file.
+
+    Parameters:
+    ----------
+    bam_path (str): Path to the BAM file.
+    bin_bed_path (str): Path to the bed file containing genomic windows.
+    out_path (str): Path to the output bed file with coverage information.
+
+    Returns:
+    -------
+    None
+    """
+    cmd = [
+        "bedtools", "coverage",
+        "-a", bin_bed_path,
+        "-b", bam_path,
+        "-counts",
+        "-g", bin_bed_path
+    ]
+    
+    with open(out_path, 'w') as out_file:
+        subprocess.run(cmd, stdout=out_file, check=True)
     return out_path

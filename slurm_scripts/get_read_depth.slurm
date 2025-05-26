@@ -1,14 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=read_depth
-#SBATCH --output=logs/read_depth.log
+#SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=${2}
 #SBATCH --mem=128G
 #SBATCH --time=5:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
 
+module load samtools
 module load miniforge3
 conda init bash
 source ~/.bashrc
@@ -17,12 +18,19 @@ conda activate seqtools_env
 BASEDIR="/data1/shahs3/users/sunge/cnv_simulator"
 BAMDIR="${BASEDIR}/synthetic_bams"
 OUTDIR="${BASEDIR}/synthetic_bams/read_depth"
-SAMPLE_NAME="minitest_c3_8_sg0_500cells_cnv"
+SAMPLE_NAME=$1
+NCORES=$2
 
-profile_path="${BASEDIR}/data/small_cnv_profiles/${SAMPLE_NAME}_profile.tsv"
+bam_path="${BAMDIR}/${SAMPLE_NAME}_final_sorted_cnv.bam"
+barcodes_path="${BAMDIR}/${SAMPLE_NAME}_final_sorted_cnv.bam.barcodes.txt"
 
-echo ${OUTDIR}/${SAMPLE_NAME}
-echo ${BAMDIR}/${SAMPLE_NAME}.bam
-echo ${profile_path}
+TMP_BAMDIR="${BAMDIR}/tmp"
+mkdir -p "$TMP_BAMDIR"
 
-mosdepth --no-per-base --fast-mode --threads 32 --by 10000 ${OUTDIR}/${SAMPLE_NAME} ${BAMDIR}/${SAMPLE_NAME}.bam
+# Extract barcodes from the BAM file
+
+
+# Get read depth for each barcode
+# Write read depth to a temporary file
+
+# Merge read depth temporary files into final output file, should be compressed
