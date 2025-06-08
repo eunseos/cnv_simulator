@@ -3,8 +3,8 @@
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --mem=256G
+#SBATCH --time=48:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -33,7 +33,7 @@ PROFILE_DIR="${BASEDIR}/synthetic_bams_2/${profile_name}"
 mkdir -p "$PROFILE_DIR"
 mkdir -p "${PROFILE_DIR}/logs"
 
-profile_params_path="${BASEDIR}/data/synthetic_profile_inputs/small_test_1.tsv"
+profile_params_path="None"
 bam_dir="${BASEDIR}/data/normal_cell_bams"
 input_dir="${PROFILE_DIR}"
 output_dir="${PROFILE_DIR}"

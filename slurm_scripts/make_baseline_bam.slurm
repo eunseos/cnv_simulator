@@ -3,8 +3,8 @@
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --mem=256G
+#SBATCH --time=48:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -34,7 +34,14 @@ if [ -z "$GROUP_NAME" ]; then
 else
     PROFILE_PATH="${PROFILE_DIR}/${PROFILE_NAME}_${GROUP_NAME}_cell_profile.tsv"
 fi
+RAW_BAM_PATH="${PROFILE_DIR}/${PROFILE_NAME}_sorted.bam"
 OUT_BAM_PATH="${PROFILE_DIR}/${PROFILE_NAME}_baseline_cells.bam"
+
+# Check if output BAM file already exists
+if [[ -f "$OUT_BAM_PATH" ]]; then
+    echo "Output BAM file already exists: $OUT_BAM_PATH"
+    exit 0
+fi
 
 # Create output directory if it doesn't exist
 mkdir -p "$PROFILE_DIR"
@@ -42,7 +49,7 @@ mkdir -p "$PROFILE_DIR"
 echo "Reading profile: $PROFILE_PATH"
 
 # Extract baseline cells and groups
-BASELINE_GROUPS_UNIQUE=$(awk -F'\t' '$1 == -1 {gsub(/"/, "", $9); print $9}' "$PROFILE_PATH" | tr ',' '\n' | sort -u)
+BASELINE_GROUPS_UNIQUE=$(awk -F'\t' '$1 == -1 {gsub(/"/, "", $NF); print $NF}' "$PROFILE_PATH" | tr ',' '\n' | sort -u)
 ALL_CHROMOSOMES=$(awk -F'\t' 'NR > 2 && $2 != 0 {print $2}' "$PROFILE_PATH" | sort -u)
 
 echo "Chromosomes: $ALL_CHROMOSOMES"
@@ -68,10 +75,10 @@ for group in $BASELINE_GROUPS_UNIQUE; do
 
     # Get barcodes for this group
     GROUP_BARCODES=$(awk -F'\t' -v group="$group" '$1 == -1 {
-        gsub(/"/, "", $8);
-        gsub(/"/, "", $9);
-        split($8, cells, ",");
-        split($9, groups, ",");
+        gsub(/"/, "", $(NF-1));
+        gsub(/"/, "", $NF);
+        split($(NF-1), cells, ",");
+        split($NF, groups, ",");
         for (i = 1; i <= length(groups); i++) {
             if (groups[i] == group) {
                 print cells[i]
@@ -101,11 +108,14 @@ for group in $BASELINE_GROUPS_UNIQUE; do
 done
 
 # Merge all temporary BAM files into the final baseline BAM
-echo "Merging BAM files into: $OUT_BAM_PATH"
-samtools merge -@ 32 -f "$OUT_BAM_PATH" $(cat "$MERGE_LIST")
+echo "Merging BAM files into: $RAW_BAM_PATH"
+samtools merge -@ 32 -f "$RAW_BAM_PATH" $(cat "$MERGE_LIST")
+samtools sort -@ 32 -o "$OUT_BAM_PATH" "$RAW_BAM_PATH"
 samtools index -@ 32 "$OUT_BAM_PATH"
 
 xargs rm -f < "$MERGE_LIST"
+
+rm $RAW_BAM_PATH
 
 echo "Baseline BAM file created at: $OUT_BAM_PATH"
 

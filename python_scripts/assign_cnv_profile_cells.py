@@ -77,16 +77,21 @@ def sample_additional_reads(n_current_reads, n_current_cells, n_required_reads,
         while_loop_counter += 1
         logger.debug(f"Current new cells reads: {n_current_reads}, Current new cells: {n_required_cells}")
         logger.debug(f"While loop counter: {while_loop_counter}")
-        if while_loop_counter > 10:
-            raise ValueError(f"Not enough reads in region {region}. {n_current_reads} reads available, {n_required_reads} reads required.")
+        if while_loop_counter > 30:
+            logger.warning(f"While loop counter exceeded 30 iterations. Current reads: {n_current_reads}, Required reads: {n_required_reads}.")
+            if n_current_reads >= n_required_reads:
+                logger.debug(f"Returning current new cells with {n_current_reads} reads.")
+                return current_new_cells
+            else:
+                logger.warning("Returning insufficient reads.")
+                return current_new_cells
     return current_new_cells
 
 
-def assign_cells_to_profile(profile, profile_params, all_normal_cells, group_name, bam_dir,
+def assign_cells_to_profile(profile, cells_per_clone, all_normal_cells, group_name, bam_dir,
                             allow_dup = False, NCORES = 32):
     logger = logging.getLogger(__name__)
     
-    cells_per_clone = list(map(int, profile_params['cells_per_clone_lst'].split(",")))
     if group_name == "all":
         group_cells = all_normal_cells
     elif group_name == None:
@@ -125,11 +130,12 @@ def assign_cells_to_profile(profile, profile_params, all_normal_cells, group_nam
 
     # Assign additional cells for CNVs
     for index, row in profile.iterrows():
+        logger.info(f"Processing row {index} clone {row['clone']} with state {row['state']}")
         clone_baseline_cells = cell_profile_rows[int(row['clone'] + 1)]
         if row['state'] <= 0:
             cell_profile_rows.append(clone_baseline_cells)
         else:
-            region = f"{int(row['chr'])}:{int(row['start'])}-{int(row['end'])}"
+            region = f"{str(row['chr'])}:{int(row['start'])}-{int(row['end'])}"
             n_available_reads = get_region_read_count(bam_dir, region, unique_groups, unused_cells, NCORES = NCORES)
             n_clone_reads = get_region_read_count(bam_dir, region, unique_groups, clone_baseline_cells, NCORES = NCORES)
             n_required_reads = (n_clone_reads / 2) * row['state']
@@ -145,7 +151,10 @@ def assign_cells_to_profile(profile, profile_params, all_normal_cells, group_nam
                     raise ValueError(f"Not enough reads in region {region} for clone {row['clone']} in selected groups. Try running on group_name = all.")
             else:
                 n_new_cells = int(len(clone_baseline_cells) * row['state'])
-                new_cells = unused_cells.sample(n = n_new_cells)
+                if allow_dup == False:
+                    new_cells = unused_cells.sample(n = n_new_cells, replace = False)
+                else:
+                    new_cells = unused_cells.sample(n = n_new_cells, replace = True)
                 n_new_cells_reads = get_region_read_count(bam_dir, region, unique_groups, new_cells, NCORES = NCORES)
                 logger.debug(f"New cells reads: {n_new_cells_reads}, New cells: {n_new_cells}")
 
@@ -172,17 +181,18 @@ def assign_cells_to_profile(profile, profile_params, all_normal_cells, group_nam
     
     logger.debug(f"Cell list length: {len(profile_cell_lst)}, length of profile: {len(profile)}")
     baseline_clone_lst = [-1] + [i for i in range(len(cells_per_clone))]
+    baseline_cell_count_lst = [sum(cells_per_clone)] + cells_per_clone
     baseline_cell_assign_profile = pd.DataFrame({"clone": baseline_clone_lst,
                                                  "chr": [0] * len(baseline_clone_lst), 
                                                  "start": [0] * len(baseline_clone_lst),
                                                  "end": [0] * len(baseline_clone_lst),
                                                  "copy_number": [2] * len(baseline_clone_lst),
                                                  "state": [0] * len(baseline_clone_lst),
-                                                 "size": [0] * len(baseline_clone_lst)})
+                                                 "size": [0] * len(baseline_clone_lst),
+                                                 "cell_count": baseline_cell_count_lst})
     cell_assign_profile = pd.concat([baseline_cell_assign_profile, profile.copy()], ignore_index = True)
     cell_assign_profile = cell_assign_profile.assign(cell_barcode = profile_cell_lst,
                                                      sample_group = profile_group_lst)
-    logger.info(f"Assigned cells for profile {profile_params['test_id']}")
     return cell_assign_profile
 
 
@@ -191,7 +201,7 @@ def assign_cells_to_profile(profile, profile_params, all_normal_cells, group_nam
 def parse_args():
     parser = argparse.ArgumentParser(description="Assign cells for gains in CNV profile")
     parser.add_argument("--profile_name", type=str, required = True, help="Path to CNV profile file")
-    parser.add_argument("--profile_params_path", type = str, required = True, help="Path to file with CNV profile parameters")
+    parser.add_argument("--profile_params_path", type = str, default = "", help="Path to file with CNV profile parameters")
     parser.add_argument("--group_name", type = str, default = None, help="Name of the group to pick cells from")
     parser.add_argument("--bam_dir", type = str, required = None, help="Directory where BAM files are stored")
     parser.add_argument("--allow_dup", type = str, default = False, help="Whether to strictly enforce no duplicate cell barcodes")
@@ -208,26 +218,35 @@ def main(profile_name, profile_params_path, group_name, bam_dir, allow_dup,
     if not os.path.exists(input_dir):
         raise ValueError(f"Input directory {input_dir} does not exist.")
     
-    # Load the CNV profile parameters
-    logger.debug(f"Loading profile parameters from {profile_params_path}")
-    profile_params = pd.read_csv(profile_params_path, sep = "\t")
-    if profile_name not in profile_params['test_id'].values:
-        raise ValueError(f"Profile name {profile_name} not found in profile parameters file.")
-    profile_params = profile_params[profile_params['test_id'] == profile_name].iloc[0]
-
     # Load the CNV profile
     logger.debug(f"Loading CNV profile from {input_dir}/{profile_name}_cnv_profile.tsv")
     profile_path = f"{input_dir}/{profile_name}_cnv_profile.tsv"
     if not os.path.exists(profile_path):
         raise ValueError(f"Profile file {profile_path} does not exist.")
-    profile = pd.read_csv(profile_path, sep = "\t")
+    profile = pd.read_csv(profile_path, sep = "\t") 
+    
+    # Load the CNV profile parameters
+    if os.path.exists(profile_params_path):
+        logger.debug(f"Loading profile parameters from {profile_params_path}")
+        profile_params = pd.read_csv(profile_params_path, sep = "\t")
+        if profile_name not in profile_params['test_id'].values:
+            raise ValueError(f"Profile name {profile_name} not found in profile parameters file.")
+        profile_params = profile_params[profile_params['test_id'] == profile_name].iloc[0]
+        cells_per_clone = profile_params['cells_per_clone'].split(",")
+        cells_per_clone = [int(x) for x in cells_per_clone]
+    else:
+        cells_per_clone = profile.drop_duplicates(subset='clone')['cell_count'].dropna().astype(int).tolist()
+        n_unique_clones = profile['clone'].nunique()
+        if len(cells_per_clone) != n_unique_clones:
+            raise ValueError(f"Number of unique clones {n_unique_clones} does not match number of unique cell counts {len(cells_per_clone)} in profile {profile_name}.")
+    logger.debug(f"Cells per clone: {cells_per_clone}")
 
     # Load the cell barcodes
     logger.debug(f"Loading cell barcodes from {DATADIR}/all_normal_cells.csv")
     all_normal_cells = pd.read_csv(f"{DATADIR}/all_normal_cells.csv")
 
     logger.info(f"Assigning cells to {profile_name} profile")
-    cell_assign_profile = assign_cells_to_profile(profile, profile_params, all_normal_cells, group_name, bam_dir, 
+    cell_assign_profile = assign_cells_to_profile(profile, cells_per_clone, all_normal_cells, group_name, bam_dir, 
                                                   allow_dup = allow_dup, NCORES = NCORES)
     
     # Save the assigned cells to a file

@@ -9,7 +9,7 @@ import shutil
 from samtools_utils import *
 
 BASEDIR = "/data1/shahs3/users/sunge/cnv_simulator"
-profile_name = "minitest_c2_1"
+profile_name = "minitest_c3_4"
 
 BAMDIR = f"{BASEDIR}/synthetic_bams_2/{profile_name}"
 
@@ -34,16 +34,16 @@ print(clone_cell_id_dict.keys())
 baseline_bam_path = f"{BAMDIR}/{profile_name}_baseline_cells.bam"
 # synthetic_bam_path = f"{BAMDIR}/{profile_name}_unnormalized_cnv.bam"
 synthetic_bam_path = f"{BAMDIR}/{profile_name}_final_sorted_cnv.bam"
-del_region = "1:72429122-76860719"
+del_region = "1:133202360-142859359"
 
 print(f"Baseline BAM path: {baseline_bam_path}")
 baseline_region_counts = samtools_get_indexed_read_count(baseline_bam_path,
                                                          del_region,
-                                                         cell_barcodes = clone_cell_id_dict["clone1"])
+                                                         cell_barcodes = clone_cell_id_dict["clone2"])
 print(f"Baseline read count in {del_region}: {baseline_region_counts}")
 
 print(f"Synthetic BAM path: {synthetic_bam_path}")
 synthetic_region_counts = samtools_get_indexed_read_count(synthetic_bam_path,
                                                          del_region,
-                                                         cell_barcodes = clone_cell_id_dict["clone1"])
+                                                         cell_barcodes = clone_cell_id_dict["clone2"])
 print(f"Synthetic read count in {del_region}: {synthetic_region_counts}")

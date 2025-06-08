@@ -2,6 +2,7 @@ import os
 import subprocess
 import logging
 import tempfile
+from pathlib import Path
 
 ##################################################################
 # SAMTOOLS UTILS
@@ -273,21 +274,9 @@ def samtools_get_reads(bam_path, out_path, region = None, cell_barcodes = None,
     return out_path
 
 
-def samtools_merge(bam_paths, out_path, NCORES = 32):
-    """
-    Merge multiple BAM files into a single BAM file.
-
-    Parameters:
-    ----------
-    bam_paths (list): List of paths to the BAM files to merge.
-    out_path (str): Path to the output merged BAM file.
-
-    Returns:
-    -------
-    out_path: Path to the merged BAM file.
-    """
+def _run_samtools_merge(bam_paths, out_path, NCORES):
     cmd = [
-        "samtools", "merge", "-@", str(NCORES),
+        "samtools", "merge", "-@", str(NCORES), "-c", "-p", "--no-PG",
         out_path,
         *bam_paths
     ]
@@ -299,6 +288,55 @@ def samtools_merge(bam_paths, out_path, NCORES = 32):
         logger.error(f"Error message: {e.stderr.strip()}")
         raise
     return out_path
+
+
+def samtools_merge(bam_paths, out_path, NCORES=32, batch_size=10, _tmpdir_obj=None):
+    """
+    Merge multiple BAM files into a single BAM file using samtools.
+
+    Parameters:
+    ----------
+    bam_paths (list): List of paths to the BAM files to merge.
+    out_path (str): Path to the output merged BAM file.
+    NCORES (int): Number of threads to use for merging.
+    batch_size (int): Number of BAM files to merge at once. Default is 10.
+    _tmpdir_obj (TemporaryDirectory): Optional existing temp directory object.
+
+    Returns:
+    -------
+    out_path: Path to the merged BAM file.
+    """
+    if len(bam_paths) == 0:
+        raise ValueError("No BAM files provided for merging.")
+
+    created_temp_dir = False
+    if _tmpdir_obj is None:
+        _tmpdir_obj = tempfile.TemporaryDirectory()
+        created_temp_dir = True
+
+    tmpdir = Path(_tmpdir_obj.name)
+    round_num = 0
+    current_paths = bam_paths
+
+    while len(current_paths) > 1:
+        logger.info(f"Batching round {round_num + 1}: merging {len(current_paths)} files.")
+        next_paths = []
+        for i in range(0, len(current_paths), batch_size):
+            batch = current_paths[i:i + batch_size]
+            # Decide if this is the final merge
+            is_final_round = len(current_paths) <= batch_size
+            batch_out = out_path if is_final_round else str(tmpdir / f"merged_round{round_num}_batch{i // batch_size}.bam")
+            logger.info(f"Merging batch {i // batch_size + 1} of {len(batch)} files in round {round_num}")
+            _run_samtools_merge(batch, batch_out, NCORES)
+            next_paths.append(batch_out)
+        current_paths = next_paths
+        round_num += 1
+
+    if created_temp_dir:
+        _tmpdir_obj.cleanup()
+
+    return out_path
+
 
 def samtools_index(bam_path, NCORES = 32):
     """
@@ -350,6 +388,107 @@ def samtools_sort(bam_path, out_path, NCORES = 32):
         logger.error(f"Error message: {e}")
         raise
     return out_path
+
+
+def _run_picard_merge(bam_paths, out_path):
+    """
+    Run Picard's MergeSamFiles to merge multiple BAM files into one.
+
+    Parameters:
+    ----------
+    bam_paths (list): List of paths to the BAM files to merge.
+    out_path (str): Path to the output merged BAM file.
+
+    Returns:
+    -------
+    out_path: Path to the merged BAM file.
+    """
+    input_args = " ".join(f"INPUT={bam}" for bam in bam_paths)
+
+    picard_path = os.path.expanduser("~/packages/picard.jar")
+
+    cmd = (
+        f"java -Xmx128g -jar {picard_path} MergeSamFiles "
+        f"{input_args} OUTPUT={out_path} USE_THREADING=true VALIDATION_STRINGENCY=LENIENT"
+    )
+
+    try:
+        logger.info(f"Merging {len(bam_paths)} BAM files into {out_path} using Picard.")
+        logger.debug(f"Executing command: {cmd}")
+        subprocess.run(cmd, check=True, shell=True, text=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing command: {cmd}")
+        logger.error(f"Error message: {e}")
+        raise
+    
+    return out_path
+
+def check_bam_integrity(bam_paths):
+    for bam in bam_paths:
+        # quickcheck first
+        result = subprocess.run(["samtools", "quickcheck", bam])
+        if result.returncode != 0:
+            raise RuntimeError(f"Corrupted BAM file detected by quickcheck: {bam}")
+        # try reading the header
+        result = subprocess.run(["samtools", "view", "-H", bam], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(f"Corrupted BAM file detected by view -H: {bam}\n{result.stderr.decode()}")
+
+def picard_merge(bam_paths, out_path, batch_size=10, NCORES=32, _tmpdir_obj=None):
+    """
+    Merges multiple BAM files using Picard's MergeSamFiles, batching if needed.
+
+    Parameters:
+    -----------
+    bam_paths (list): List of paths to BAM files to merge.
+    out_path (str): Path to the final merged BAM file.
+    batch_size (int): Maximum number of files to merge in one call to Picard.
+    _tmpdir_obj (tempfile.TemporaryDirectory or None): Optional existing temporary directory.
+
+    Returns:
+    --------
+    out_path (str): Path to the merged BAM file.
+    """
+    logger.info("Starting Picard merge.")
+
+    check_bam_integrity(bam_paths)
+
+    created_temp_dir = False
+    if _tmpdir_obj is None:
+        _tmpdir_obj = tempfile.TemporaryDirectory()
+        created_temp_dir = True
+
+    tmpdir = Path(_tmpdir_obj.name)
+    intermediate_paths = list(bam_paths)
+    round_num = 0
+
+    while len(intermediate_paths) > batch_size:
+        logger.info(f"Batching round {round_num + 1}: merging {len(intermediate_paths)} files.")
+        new_intermediate_paths = []
+        for i in range(0, len(intermediate_paths), batch_size):
+            batch = intermediate_paths[i:i + batch_size]
+            batch_out = tmpdir / f"merged_round{round_num}_batch_{i // batch_size}.bam"
+            logger.debug(f"Merging batch {i // batch_size + 1} with {len(batch)} files.")
+            # Using samtools for internal batches
+            _run_samtools_merge(batch, str(batch_out), NCORES)
+            new_intermediate_paths.append(str(batch_out))
+        intermediate_paths = new_intermediate_paths
+        round_num += 1
+
+    for batch_out in new_intermediate_paths:
+        result = subprocess.run(["samtools", "quickcheck", batch_out])
+        if result.returncode != 0:
+            raise RuntimeError(f"Corrupted BAM file detected: {batch_out}")
+
+    # Final merge
+    logger.info(f"Final merge of {len(intermediate_paths)} BAM files into {out_path}.")
+    _run_picard_merge(intermediate_paths, out_path)
+
+    if created_temp_dir:
+        _tmpdir_obj.cleanup()
+
+    return out_path
+
 
 
 ##################################################################

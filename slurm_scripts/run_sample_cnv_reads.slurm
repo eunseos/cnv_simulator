@@ -3,13 +3,14 @@
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=64G
-#SBATCH --time=1:00:00
+#SBATCH --mem=256G
+#SBATCH --time=48:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
 
 module load samtools
+module load java
 module load miniforge3
 conda init bash
 source ~/.bashrc
@@ -36,6 +37,7 @@ log_path="${log_dir}/${PROFILE_NAME}_sample_cnv_reads_$(date +'%Y%m%d_%H%M%S').l
 python /data1/shahs3/users/sunge/cnv_simulator/python_scripts/sample_cnv_reads.py \
     --profile_name $PROFILE_NAME \
     --profile_dir $PROFILE_DIR \
+    # --delete_tmp \
     --ncores 32 \
     > "$log_path" 2>&1
 if [ $? -ne 0 ]; then

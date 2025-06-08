@@ -1,0 +1,149 @@
+---
+title: "Clean CINner Profile"
+output: html_document
+date: "2025-06-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+```
+
+## Set Paths
+
+```{r set_paths}
+
+BASEDIR <- "/data1/shahs3/users/sunge/cnv_simulator/"
+sample_name <- "cinner_def1_4"
+sample_dir <- file.path(BASEDIR, "synthetic_bams_2", sample_name)
+fig_dir <- file.path(sample_dir, "figs")
+if (!dir.exists(fig_dir)) {
+  dir.create(fig_dir, recursive = TRUE)
+}
+
+chr_lengths <- read.csv(file.path(BASEDIR, "data", "chr_lengths.csv")) %>% 
+  mutate(chr = as.factor(chr))
+
+init_profile <- read.csv(file.path(sample_dir,
+                                   paste0(sample_name, "_raw_cnv_profile.csv"))) %>% 
+  mutate(chr = as.factor(chr))
+
+cell_clones <- read.csv(file.path(sample_dir,
+                                  paste0(sample_name, "_cell_clone.csv"))) %>% 
+  rename("cell_id" = "Cell", "clone_id" = "Clone")
+
+```
+
+```{r plot_per_chr_copy}
+
+ggplot(init_profile, aes(x = copy)) +
+  geom_histogram(binwidth = 1, fill = "skyblue") +
+  facet_wrap(~ chr, ncol = 5) +
+  theme_minimal() +
+  labs(title = "Copy number histogram per chromosome",
+       x = "Copy number",
+       y = "Count")
+
+ggsave(file.path(fig_dir, "cp_histogram_per_chr.png"),
+       width = 10, height = 8)
+
+```
+
+```{r clean_cnv_profile_function}
+
+get_clean_cnv_profile <- function(select_init_profile, cell_clones, chr_lengths) {
+  # Rename clone_id to be numbers
+  clone_id_map <- cell_clones %>% 
+    distinct(clone_id) %>% 
+    arrange(clone_id) %>% 
+    mutate(new_clone_id = row_number() - 1)
+  new_cell_clones <- cell_clones %>% 
+    left_join(clone_id_map, by = "clone_id") %>% 
+    select(-clone_id) %>% 
+    rename("clone_id" = "new_clone_id")
+
+  # Merge consecutive regions with same copy number
+  merged_copy_regions <- select_init_profile %>% 
+    left_join(new_cell_clones, by = "cell_id") %>% 
+    arrange(clone_id, chr, start) %>% 
+    mutate(copy = round(copy)) %>% 
+    group_by(clone_id) %>% 
+    mutate(run = cumsum(copy != lag(copy, default = first(copy)))) %>% 
+    group_by(clone_id, chr, copy, run) %>% 
+    summarise(
+      start = min(start),
+      end = max(end),
+      .groups = "drop"
+    ) %>% 
+    select(-run)
+  
+  # Get additional rows to fill ends of chromosomes
+  end_fill_rows <- merged_copy_regions %>% 
+    left_join(chr_lengths, by = "chr") %>% 
+    group_by(chr, clone_id) %>% 
+    summarise(max_end = max(end), chr_len = first(length), .groups = "drop") %>% 
+    filter(max_end < chr_len) %>% 
+    mutate(start = max_end + 1,
+           end = chr_len,
+           copy = 2) %>% 
+    select(clone_id, chr, start, end, copy)
+  
+  # Merged filled rows to profile
+  merged_copy_regions_filled <- merged_copy_regions %>% 
+    left_join(chr_lengths, by = "chr") %>% 
+    mutate(end = pmin(end, length)) %>% 
+    select(-length) %>% 
+    bind_rows(end_fill_rows) %>% 
+    arrange(clone_id, chr, start) %>% 
+    select(clone_id, chr, start, end, copy)
+  
+  # Count number of cells per clone
+  cells_per_clone <- table(new_cell_clones$clone_id) %>% 
+    as.data.frame() %>% 
+    rename("clone_id" = "Var1",
+           "cell_count" = "Freq") %>% 
+    mutate(clone_id = as.numeric(as.character(clone_id)))
+  
+  # Add on cells per clone count and rename clone column
+  final_cnv_profile <- merged_copy_regions_filled %>% 
+    left_join(cells_per_clone, by = "clone_id") %>% 
+    rename("clone" = "clone_id",
+           "copy_number" = "copy") %>% 
+    mutate(start = as.integer(start),
+           end = as.integer(end),
+           state = copy_number - 2,
+           size = end - start) %>%
+    select(clone, chr, start, end, copy_number, state, size, cell_count)
+  
+  return(final_cnv_profile)
+}
+
+
+```
+
+```{r get_clean_cnv_profile}
+
+select_chr <- c("4", "7")
+
+select_init_profile <- init_profile %>% 
+  filter(chr %in% select_chr)
+
+cnv_profile <- get_clean_cnv_profile(select_init_profile, cell_clones, chr_lengths)
+
+cnv_profile_path <- file.path(sample_dir,
+                              paste0(sample_name, "_cnv_profile.tsv"))
+options(scipen = 999)
+write.table(cnv_profile, cnv_profile_path, sep = "\t",
+            row.names = FALSE, quote = FALSE)
+
+```
+
+
+
+
+
+
+
+
