@@ -3,8 +3,8 @@
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=1:00:00
+#SBATCH --mem=128G
+#SBATCH --time=10:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org

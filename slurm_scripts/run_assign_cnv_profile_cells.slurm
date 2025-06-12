@@ -2,9 +2,9 @@
 #SBATCH --job-name=assign_cells
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -37,7 +37,7 @@ profile_params_path="None"
 bam_dir="${BASEDIR}/data/normal_cell_bams"
 input_dir="${PROFILE_DIR}"
 output_dir="${PROFILE_DIR}"
-NCORES=32
+NCORES=$SLURM_CPUS_PER_TASK
 
 log_dir="${PROFILE_DIR}/logs"
 mkdir -p "$log_dir"

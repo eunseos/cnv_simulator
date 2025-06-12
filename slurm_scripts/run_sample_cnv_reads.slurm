@@ -2,9 +2,9 @@
 #SBATCH --job-name=sample_cnv_reads
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -37,8 +37,7 @@ log_path="${log_dir}/${PROFILE_NAME}_sample_cnv_reads_$(date +'%Y%m%d_%H%M%S').l
 python /data1/shahs3/users/sunge/cnv_simulator/python_scripts/sample_cnv_reads.py \
     --profile_name $PROFILE_NAME \
     --profile_dir $PROFILE_DIR \
-    # --delete_tmp \
-    --ncores 32 \
+    --ncores $SLURM_CPUS_PER_TASK \
     > "$log_path" 2>&1
 if [ $? -ne 0 ]; then
     echo "Error: Python script failed. Check log file for details."

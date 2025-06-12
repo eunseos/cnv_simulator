@@ -2,9 +2,9 @@
 #SBATCH --job-name=baseline_bam
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -102,16 +102,16 @@ for group in $BASELINE_GROUPS_UNIQUE; do
     # Write the temporary BAM file with select chromosomes and cells to the merge list
     read -ra BARCODE_ARGS <<< "$BARCODE_FILTERS"
     readarray -t CHROM_ARGS <<< "$ALL_CHROMOSOMES"
-    samtools view -@ 32 -b "${BARCODE_ARGS[@]}" "$BAM_PATH" "${CHROM_ARGS[@]}" -o "$OUT_BAM_TMP"
+    samtools view -@ $SLURM_CPUS_PER_TASK -b "${BARCODE_ARGS[@]}" "$BAM_PATH" "${CHROM_ARGS[@]}" -o "$OUT_BAM_TMP"
     
     echo "$OUT_BAM_TMP" >> "$MERGE_LIST"
 done
 
 # Merge all temporary BAM files into the final baseline BAM
 echo "Merging BAM files into: $RAW_BAM_PATH"
-samtools merge -@ 32 -f "$RAW_BAM_PATH" $(cat "$MERGE_LIST")
-samtools sort -@ 32 -o "$OUT_BAM_PATH" "$RAW_BAM_PATH"
-samtools index -@ 32 "$OUT_BAM_PATH"
+samtools merge -@ $SLURM_CPUS_PER_TASK -f "$RAW_BAM_PATH" $(cat "$MERGE_LIST")
+samtools sort -@ $SLURM_CPUS_PER_TASK -o "$OUT_BAM_PATH" "$RAW_BAM_PATH"
+samtools index -@ $SLURM_CPUS_PER_TASK "$OUT_BAM_PATH"
 
 xargs rm -f < "$MERGE_LIST"
 

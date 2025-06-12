@@ -31,7 +31,9 @@ copynumber_colors = {
 def plot_true_cnv(cnv_profile_df, n_cells_per_clone, centromere_pos, FIGDIR = None):
     num_clones = len(cnv_profile_df["clone"].unique())
 
-    chr_lengths = cnv_profile_df.groupby("chr")["end"].max().sort_index()
+    chr_lengths = cnv_profile_df.groupby("chr")["end"].max()
+    sorted_chr = sort_chr_list(chr_lengths.index.tolist())
+    chr_lengths = chr_lengths[sorted_chr]
     chr_offsets = chr_lengths.cumsum().shift(fill_value = 0).to_dict()
     chr_labels = {pos: chr for chr, pos in chr_offsets.items()}
 
@@ -71,7 +73,7 @@ def plot_true_cnv(cnv_profile_df, n_cells_per_clone, centromere_pos, FIGDIR = No
 
         ax[i].set_ylabel("State")
         ax[i].set_title(f"Clone {clone} ({n_cells_per_clone[i]} cells)")
-        ax[i].set_ylim(-2, 14)
+        ax[i].set_ylim(-2.5, 14)
 
     plt.tight_layout()
 
@@ -89,10 +91,11 @@ def plot_read_depth_heatmap(read_depth_mat, clone_cell_idx_dict, clone_lst, bins
 
     clone_color_palette = sns.color_palette("tab10", n_colors = len(clone_lst))
 
+    sorted_chr_lst = sort_chr_list(chr_lst)
     for clone in clone_lst:
         clone_idxs = sorted(clone_cell_idx_dict[f"clone{clone}"])
         chr_heatmap_data_lst = []
-        for chr in chr_lst:
+        for chr in sorted_chr_lst:
             if bin_range is not None:
                 chr_bin_idxs = bins[(bins["chrom"] == chr) & (bins["start"] >= bin_range[0]) & (bins["end"] <= bin_range[1])].index.tolist()
             else:
@@ -111,7 +114,7 @@ def plot_read_depth_heatmap(read_depth_mat, clone_cell_idx_dict, clone_lst, bins
 
     chr_start_pos = []
     pos = 0
-    for chr in chr_lst:
+    for chr in sorted_chr_lst:
         n_bins = len(bins[bins["chrom"] == chr])
         chr_start_pos.append(pos)
         pos += n_bins // bin_mult
@@ -136,7 +139,7 @@ def plot_read_depth_heatmap(read_depth_mat, clone_cell_idx_dict, clone_lst, bins
     cluster_plt.ax_heatmap.set_ylabel("Cells")
     cluster_plt.ax_heatmap.set_xlabel("Bins")
     cluster_plt.ax_heatmap.set_xticks(chr_start_pos)
-    cluster_plt.ax_heatmap.set_xticklabels(chr_lst)
+    cluster_plt.ax_heatmap.set_xticklabels(sorted_chr_lst)
 
     for xpos in chr_start_pos:
         cluster_plt.ax_heatmap.axvline(x = xpos, color = "white", linestyle = "-", linewidth = 1)
@@ -150,12 +153,12 @@ def plot_read_depth_heatmap(read_depth_mat, clone_cell_idx_dict, clone_lst, bins
 
 def plot_read_depth_scatter(read_depth_mat, clone_cell_idx_dict, clone_lst, bins, bin_size, bin_mult, chr_lst,
                             bin_range = None, prefix = "", FIGDIR = None):
-
-    fig, ax = plt.subplots(figsize=(10, 3 * len(clone_lst)), nrows = len(clone_lst), ncols = len(chr_lst), squeeze = False)
+    sorted_chr_lst = sort_chr_list(chr_lst)
+    fig, ax = plt.subplots(figsize=(10, 3 * len(clone_lst)), nrows = len(clone_lst), ncols = len(sorted_chr_lst), squeeze = False)
 
     for i, clone in enumerate(clone_lst):
         clone_idxs = sorted(clone_cell_idx_dict[f"clone{clone}"])
-        for j, chr in enumerate(chr_lst):
+        for j, chr in enumerate(sorted_chr_lst):
             if bin_range is not None:
                 chr_bin_idxs = bins[(bins["chrom"] == chr) & (bins["start"] >= bin_range[0]) & (bins["end"] <= bin_range[1])].index.tolist()
             else:
@@ -301,6 +304,16 @@ def main():
             prefix = f"{test_name}_",
             FIGDIR = FIGDIR
         )
+
+def sort_chr_list(chr_list):
+    def chr_key(chr_name):
+        try:
+            return (0, int(chr_name))
+        except ValueError:
+            # X, Y, M, etc. come last, in this order
+            order = {"X": 1, "Y": 2, "M": 3}
+            return (1, order.get(chr_name, 99), chr_name)
+    return sorted(chr_list, key=chr_key)
 
 if __name__ == "__main__":
     main()

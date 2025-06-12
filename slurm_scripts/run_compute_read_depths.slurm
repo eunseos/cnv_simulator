@@ -3,8 +3,8 @@
 #SBATCH --output=logs/%x.%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --mem=64G
+#SBATCH --time=10:00:00
 #SBATCH --partition=componc_cpu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sunge@mskcc.org
@@ -45,25 +45,37 @@ gene_windows_path="/data1/shahs3/users/sunge/cnv_simulator/data/genome_5kb_bins.
 
 log_dir="${PROFILE_DIR}/logs"
 mkdir -p "$log_dir"
-log_path="${log_dir}/${profile_name}_compute_read_depths_hmmcopy_$(date +'%Y%m%d_%H%M%S').log"
+# log_path="${log_dir}/${profile_name}_compute_read_depths_hmmcopy_$(date +'%Y%m%d_%H%M%S').log"
 
-python ${BASEDIR}/python_scripts/compute_read_depths.py \
-    --profile_dir $PROFILE_DIR \
-    --profile_name $profile_name \
-    --bam_filename $bam_filename \
-    --bin_size $bin_size \
-    --gc_wig $gc_wig_path \
-    --verbose \
-    > "$log_path" 2>&1
+# python ${BASEDIR}/python_scripts/compute_read_depths.py \
+#     --profile_dir $PROFILE_DIR \
+#     --profile_name $profile_name \
+#     --bam_filename $bam_filename \
+#     --bin_size $bin_size \
+#     --gc_wig $gc_wig_path \
+#     --verbose \
+#     > "$log_path" 2>&1
 
-echo "Read depth computation completed. Log file: $log_path"
+# echo "Read depth computation completed. Log file: $log_path"
 
 log_path="${log_dir}/${profile_name}_compute_read_depths_5000_$(date +'%Y%m%d_%H%M%S').log"
 
+# python ${BASEDIR}/python_scripts/compute_read_depths.py \
+#     --profile_dir $PROFILE_DIR \
+#     --profile_name $profile_name \
+#     --bam_filename $bam_filename \
+#     --bin_size 5000 \
+#     --gene_windows $gene_windows_path \
+#     --verbose \
+#     > "$log_path" 2>&1
+
+# echo "Gene window read depth computation completed. Log file: $log_path"
+
+baseline_bam="${profile_name}_baseline_cells.bam"
 python ${BASEDIR}/python_scripts/compute_read_depths.py \
     --profile_dir $PROFILE_DIR \
     --profile_name $profile_name \
-    --bam_filename $bam_filename \
+    --bam_filename $baseline_bam \
     --bin_size 5000 \
     --gene_windows $gene_windows_path \
     --verbose \
